@@ -526,9 +526,46 @@ chat is unaffected. Note 86.1 with the grammar armed is still above LM Studio's
 Round-trip is verified end to end: call -> `tool_calls` +
 `finish_reason: "tool_calls"`, result fed back as `role: "tool"`, model answers.
 
+## Context
+
+The model's window is **262,144 tokens** and hum does not narrow it — there is
+no cap, no truncation and no sliding window in the server. What runs out first
+is memory, and not in the place you would expect.
+
+Only 10 of the 40 layers keep a growing KV cache; the other 30 are
+linear-attention layers whose state is a fixed size no matter how long the
+conversation gets. That makes context unusually cheap here — about 35 KB per
+token, measured, against several times that for a dense model of the same size.
+
+Measured on a 36 GB M3 Max, where the wired-memory limit is around 27 GB:
+
+| context | resident after | peak during prefill | prefill |
+|---|---|---|---|
+| — | 18.4 GB | — | — |
+| 8k | 19.0 GB | 21.9 GB | 8 s |
+| 32k | 19.9 GB | 23.7 GB | 32 s |
+| 64k | 21.0 GB | 27.1 GB | 104 s |
+
+The cache itself is not the problem: 64k of it costs 2.6 GB. The peak is. Each
+2,048-token prefill chunk attends against everything before it, and that score
+matrix is transient but large — 6 GB at 64k, growing linearly with context. At
+64k the peak touches the wired limit on this machine, so **64k is the practical
+ceiling on 36 GB**, not the 256k the model advertises. A 48 GB or 64 GB Mac
+goes further.
+
+Two other things worth knowing. Prefill slows as context grows — 1,011 tok/s at
+16k, 616 tok/s at 64k — so a full 64k prompt is a 100-second wait before the
+first token, though the prompt cache means you pay it once per conversation
+rather than once per turn. And the cache holds four conversations by default
+(`--cache-entries`), each with its own KV, so four long sessions cost four
+times the memory. It is bounded by count, not by bytes.
+
 ## Limitations
 
 - **One request at a time.** No continuous batching; see the benchmark note.
+- Context is bounded by memory rather than by a setting: nothing stops you
+  sending a prompt too large for the machine, and what you get is swapping
+  rather than a clear error. See [Context](#context).
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.
