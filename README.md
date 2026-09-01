@@ -29,6 +29,22 @@ ready on http://127.0.0.1:8090  (logs: ~/.hum/hum.log)
 No flags, no model to pick, no account. Point OpenCode, your editor, or any
 OpenAI SDK at `http://127.0.0.1:8090/v1` and it works.
 
+Or try it without a client at all:
+
+```sh
+hum chat
+```
+
+```
+  ● Chatting with Qwen3.6 35B-A3B
+
+  you › Name three Roman emperors.
+
+  hum › Three notable Roman emperors include: Augustus, Trajan and Nero…
+
+  246 tokens · 398 tok/s · thought for 0.3s
+```
+
 ## Why
 
 Running a local model on a Mac today means either a GUI you have to click
@@ -164,6 +180,7 @@ Run `hum` with no arguments for a coloured overview of everything below.
 
 ```
 hum start      start in the background, wait until the model is loaded, return
+hum chat       talk to the model in the terminal, no client needed
 hum stop       stop it (signals the process group, so the worker dies too)
 hum restart    stop then start
 hum status     running? where? which model? how long?

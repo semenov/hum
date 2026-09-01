@@ -103,6 +103,7 @@ type cmdDoc struct{ name, desc string }
 
 var commands = []cmdDoc{
 	{"start", "download the model if needed, then serve in the background"},
+	{"chat", "talk to the model right here in the terminal"},
 	{"stop", "stop the server"},
 	{"restart", "stop, then start again"},
 	{"status", "is it running, on what address, with which model"},
@@ -131,6 +132,8 @@ func helpText() string {
 	b.WriteString("    " + p.blue("hum start") + "\n")
 	b.WriteString("    " + p.dim("Downloads the right model for your Mac the first time, then serves") + "\n")
 	b.WriteString("    " + p.dim("on http://127.0.0.1:8090/v1 — point any OpenAI client at it.") + "\n\n")
+	b.WriteString("    " + p.blue("hum chat") + "\n")
+	b.WriteString("    " + p.dim("Or just talk to it here, without setting up a client at all.") + "\n\n")
 
 	b.WriteString("  " + p.green("COMMANDS") + "\n")
 	for _, c := range commands {
@@ -145,6 +148,7 @@ func helpText() string {
 	b.WriteString("\n  " + p.green("EXAMPLES") + "\n")
 	for _, e := range [][2]string{
 		{"hum start", "first run downloads the model, later runs are instant"},
+		{"hum chat", "try it out without any client"},
 		{"hum status", "check it is up"},
 		{"hum logs -f", "watch what it is doing"},
 		{"hum stop", "shut it down and free the memory"},

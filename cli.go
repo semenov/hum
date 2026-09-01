@@ -76,6 +76,11 @@ func main() {
 			}
 		}
 
+	case "chat":
+		if err := chatCmd(cfg); err != nil {
+			fail(err)
+		}
+
 	case "stop":
 		if err := stopDaemon(10 * time.Second); err != nil {
 			fail(err)
