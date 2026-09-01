@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -48,6 +49,14 @@ type Progress struct {
 	wg      sync.WaitGroup
 	lastLog time.Time
 	quote   int
+
+	// The right-hand figures are refreshed on their own slow cadence. Recomputing
+	// them every frame makes the line twitch without telling you anything more.
+	rateAt    time.Time
+	rateBytes int64
+	smoothed  float64 // bytes/s, exponentially weighted
+	rateText  string
+	etaText   string
 }
 
 func NewProgress(total int64) *Progress {
@@ -128,11 +137,27 @@ func (p *Progress) render() {
 	}
 	elapsed := time.Since(p.start).Seconds()
 	speed := float64(done) / elapsed
-	// float seconds -> Duration: multiply by time.Second, do not divide by it.
-	eta := "--"
-	if speed > 0 && done < total {
-		eta = (time.Duration(float64(total-done) / speed * float64(time.Second))).
-			Round(time.Second).String()
+	if p.rateText == "" || time.Since(p.rateAt) >= 2*time.Second {
+		// Rate over the last window, smoothed. A cumulative average drags the
+		// slow first seconds along with it, which is what made the estimate
+		// swing from an hour to seven minutes while nothing had changed.
+		now := time.Now()
+		if dt := now.Sub(p.rateAt).Seconds(); dt > 0 && !p.rateAt.IsZero() {
+			inst := float64(done-p.rateBytes) / dt
+			if p.smoothed == 0 {
+				p.smoothed = inst
+			} else {
+				p.smoothed = 0.7*p.smoothed + 0.3*inst
+			}
+		} else {
+			p.smoothed = speed
+		}
+		p.rateAt, p.rateBytes = now, done
+		p.rateText = humanBytes(int64(p.smoothed)) + "/s"
+		p.etaText = "--"
+		if p.smoothed > 0 && done < total {
+			p.etaText = etaMinutes(float64(total-done) / p.smoothed)
+		}
 	}
 
 	if !p.tty {
@@ -164,13 +189,27 @@ func (p *Progress) render() {
 		bar.String(),
 		p.p.bold(fmt.Sprintf("%6.2f%%", frac*100)),
 		p.p.dim(fmt.Sprintf("%s / %s", humanBytes(done), humanBytes(total))),
-		p.p.dim(humanBytes(int64(speed))+"/s"),
-		p.p.dim("eta "+eta))
+		p.p.dim(p.rateText),
+		p.p.dim("eta "+p.etaText))
 	q := "  " + p.p.rgb(122, 162, 200, quotes[p.quote])
 
 	// Four lines: bar, blank, quote, blank. Redraw them all each tick and return
 	// the cursor to the top of the block.
 	fmt.Printf("\r\033[K%s\n\r\033[K\n\r\033[K%s\n\r\033[K\033[3A\r", line, q)
+}
+
+// etaMinutes reports whole minutes. Seconds on a twenty-minute download are
+// noise: they change constantly and nobody acts on them.
+func etaMinutes(seconds float64) string {
+	m := int(math.Ceil(seconds / 60))
+	switch {
+	case m >= 60:
+		return fmt.Sprintf("%dh %dm", m/60, m%60)
+	case m >= 1:
+		return fmt.Sprintf("%dm", m)
+	default:
+		return "<1m"
+	}
 }
 
 func humanBytes(n int64) string {
