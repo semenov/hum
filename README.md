@@ -635,15 +635,27 @@ reasons in prose, then has to produce the object, with `message.reasoning`
 carrying the thinking. But on this model they compose badly. After a thousand
 tokens of prose it writes numbers the way a person would, with separators, and
 a comma inside a JSON number is not legal, so the only tokens the grammar
-leaves are more digits: it emits zeros until it runs out of budget. Measured on
-eight cities, `{"population": <integer>}` parsed 8 times out of 8 with
-reasoning off and 2 out of 4 with it on.
+leaves are more digits: it emits zeros until it runs out of budget.
 
-So a `response_format` request that says nothing about reasoning gets none. Say
-something — `reasoning`, `reasoning_effort` or `include_reasoning`, any of the
-three — and you get exactly what you asked for, runaway integers included. If
-you want both, bound the numeric fields (`maximum`, or a string with a
-`pattern`) and the failure cannot happen.
+Measured over eight cities, asking for `{"population": <integer>}`:
+
+| | parsed |
+|---|---|
+| reasoning on, unbounded | 2 of 4 |
+| reasoning off, unbounded | 7 of 8 |
+| reasoning off, `"maximum": 50000000` | 8 of 8 |
+
+So a `response_format` request that says nothing about reasoning gets none —
+it moves the odds a long way. Say something (`reasoning`, `reasoning_effort` or
+`include_reasoning`) and you get exactly what you asked for, runaway integers
+included.
+
+**But turning reasoning off is a mitigation, not a fix. Bounding the field is
+the fix.** With no `maximum`, one more digit is always valid JSON, so no
+grammar may forbid it — llguidance cannot, Outlines cannot, and nothing else
+will either. Give the number a `maximum`, or the string a `pattern`, and the
+failure becomes impossible rather than unlikely. `bench/schema_reliability.py`
+in the research repo reproduces all three rows.
 
 Enums, nested objects, arrays with `minItems` and integer types are all
 enforced, since llguidance compiles the schema rather than approximating it. If
