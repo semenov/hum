@@ -63,6 +63,27 @@ func modelDir(repo string) string {
 	return filepath.Join(humDir(), "models", strings.ReplaceAll(repo, "/", "__"))
 }
 
+// prettyModel is the name to show a person: the catalogue name when we know
+// the model, otherwise the repo's own name with the quantisation suffix
+// dropped. modelLabel keeps the full repo for places that identify it.
+func prettyModel(path string) string {
+	repo := modelLabel(path)
+	for _, m := range Catalog {
+		if m.Repo == repo {
+			return m.Name
+		}
+	}
+	base := repo
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	for _, suf := range []string{"-MLX-4bit", "-MLX-8bit", "-MLX-bf16", "-MLX",
+		"-mlx", "-4bit", "-8bit", "-bf16"} {
+		base = strings.TrimSuffix(base, suf)
+	}
+	return base
+}
+
 // modelLabel turns a directory back into something worth reading. Managed
 // models live in a flattened directory name; anything else is shown as its
 // own basename.

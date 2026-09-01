@@ -91,7 +91,7 @@ func startDaemon(cfg Config, wait time.Duration) error {
 	_ = cmd.Process.Release()
 
 	u := newUI()
-	sp := u.Spin("Loading " + modelLabel(cfg.Model))
+	sp := u.Spin("Loading " + prettyModel(cfg.Model))
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -104,7 +104,7 @@ func startDaemon(cfg Config, wait time.Duration) error {
 			u.Para("The server is listening on http://%s and speaks the OpenAI "+
 				"chat completions API. Point OpenCode, your editor, or any OpenAI "+
 				"SDK at it — no API key is required.", cfg.Addr)
-			u.KV("Model", modelLabel(cfg.Model))
+			u.KV("Model", prettyModel(cfg.Model))
 			u.KV("Process", strconv.Itoa(pid))
 			u.KV("Logs", short(logPath()))
 			u.Hint("Stop it again with", "hum stop")
@@ -152,7 +152,7 @@ func statusCmd(cfg Config) error {
 		u.Off("Hum is not running.")
 		u.Para("No model is loaded, so none of your memory is being used.")
 		if cfg.Model != "" {
-			u.KV("Model", modelLabel(cfg.Model))
+			u.KV("Model", prettyModel(cfg.Model))
 			u.KV("Address", cfg.Addr)
 		}
 		u.Hint("Start it with", "hum start")
@@ -169,7 +169,7 @@ func statusCmd(cfg Config) error {
 	}
 	u.OK("Hum is running.")
 	u.Para("It has been up for %s and is serving on http://%s.", dur(h.Uptime), h.Addr)
-	u.KV("Model", modelLabel(h.Model))
+	u.KV("Model", prettyModel(h.Model))
 	u.KV("Process", strconv.Itoa(h.PID))
 	u.KV("Logs", short(logPath()))
 	u.Hint("Stop it with", "hum stop")

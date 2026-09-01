@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 )
@@ -31,10 +32,22 @@ func chatCmd(cfg Config) error {
 		return fmt.Errorf("the server is not answering on %s — try `hum status`", cfg.Addr)
 	}
 
-	u.OK("Chatting with %s", modelLabel(h.Model))
+	u.OK("Chatting with %s", prettyModel(h.Model))
 	u.Para("Type a message and press enter. This model thinks before it answers, " +
-		"so there is a short pause before the reply appears. Use /think to watch " +
-		"it reason, /reset for a fresh conversation, /exit to leave.")
+		"so there is a short pause before the reply appears.")
+	u.Para("/think shows its reasoning, /reset starts a fresh conversation, " +
+		"and /exit or Ctrl-D leaves. The server keeps running either way — " +
+		"stop it with `hum stop`.")
+
+	// Ctrl-C is the reflex for leaving a prompt, so make it a clean exit rather
+	// than a killed process with a stray ^C on screen.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		<-sig
+		fmt.Printf("\n\n  %s\n\n", u.p.dim("Left the chat. The server is still running."))
+		os.Exit(0)
+	}()
 
 	var history []map[string]string
 	showThinking := false
@@ -44,15 +57,15 @@ func chatCmd(cfg Config) error {
 	for {
 		fmt.Printf("  %s ", u.p.blue("you ›"))
 		if !in.Scan() {
-			fmt.Println()
-			break
+			fmt.Printf("\n\n  %s\n\n", u.p.dim("Left the chat. The server is still running."))
+			return nil
 		}
 		text := strings.TrimSpace(in.Text())
 		switch {
 		case text == "":
 			continue
 		case text == "/exit" || text == "/quit":
-			fmt.Println()
+			fmt.Printf("\n  %s\n\n", u.p.dim("Left the chat. The server is still running."))
 			return nil
 		case text == "/reset":
 			history = nil
@@ -84,8 +97,7 @@ func chatCmd(cfg Config) error {
 		history = append(history, map[string]string{"role": "assistant", "content": reply})
 		fmt.Printf("\n\n  %s\n\n", u.p.dim(st))
 	}
-	fmt.Println()
-	return nil
+	// The loop only leaves by returning; there is no path past it.
 }
 
 // streamChat sends one turn and prints the reply as it arrives, returning the
