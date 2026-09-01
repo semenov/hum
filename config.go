@@ -28,15 +28,30 @@ func humDir() string {
 
 func pathIn(name string) string { return filepath.Join(humDir(), name) }
 
+// Set at build time so a package can point at the interpreter it installed:
+//
+//	go build -ldflags "-X main.builtinPython=/path/to/venv/bin/python
+//	                   -X main.builtinWorker=/path/to/worker.py"
+var (
+	builtinPython string
+	builtinWorker string
+)
+
 func defaultConfig() Config {
 	python := "python3"
 	worker := "worker.py"
-	// The worker ships next to the binary.
+	// The worker ships next to the binary when running from a checkout.
 	if exe, err := os.Executable(); err == nil {
 		if p, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = p
 		}
 		worker = filepath.Join(filepath.Dir(exe), "worker.py")
+	}
+	if builtinPython != "" {
+		python = builtinPython
+	}
+	if builtinWorker != "" {
+		worker = builtinWorker
 	}
 	// 4242 is unassigned by IANA and easy to remember, which matters more than
 	// being unique — 1234 is LM Studio's and is surely taken elsewhere too.
