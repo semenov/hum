@@ -126,9 +126,13 @@ def lockup(ink=None):
     """ink=None emits a self-adapting file: the ink colour follows the viewer's
     colour scheme, so the logo is still right if used without <picture>."""
     if ink is None:
+        # Default to the mid tone, then sharpen for each scheme. A renderer
+        # that ignores the media queries still gets something legible either
+        # way, instead of black text on a black page.
         style = ('<style>.ink{fill:%s}'
+                 '@media(prefers-color-scheme:light){.ink{fill:%s}}'
                  '@media(prefers-color-scheme:dark){.ink{fill:%s}}</style>'
-                 % (INK_L, INK_D))
+                 % (INK_AUTO, INK_L, INK_D))
         word = "".join(f'<g class="ink" transform="translate({tx+dx:.1f},{base:.1f}) '
                        f'scale({sc},{-sc})">{glyphs}</g>' if c is None else
                        f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '

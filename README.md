@@ -1,9 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png" width="300" height="98">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo.png" width="300" height="98">
-    <img src="assets/logo-auto.png" alt="hum" width="300" height="98">
-  </picture>
+  <img src="assets/logo.svg" alt="hum" width="300" height="98">
 </p>
 
 <p align="center">
