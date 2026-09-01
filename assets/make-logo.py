@@ -30,6 +30,10 @@ if not os.path.exists(FONT):
     print("downloaded Orbitron")
 
 INK_L, INK_D = "#0B0D0E", "#F2F4F8"
+# One ink cannot be dark enough for white and light enough for #0d1117; the best
+# any single value manages on both is about 4.3:1, and this is that value. Used
+# where a renderer supports neither <picture> nor a colour scheme.
+INK_AUTO = "#787888"
 PAPER_MARK   = "#08090C"
 CY, MG       = "#22D3EE", "#F0509A"
 
@@ -163,7 +167,8 @@ def mark():
 
 open("assets/logo.svg", "w").write(lockup())
 open("assets/logo-dark.svg", "w").write(lockup(INK_D))
+open("assets/logo-auto.svg", "w").write(lockup(INK_AUTO))
 open("assets/mark.svg", "w").write(mark())
-for n in ("logo", "logo-dark", "mark"):
+for n in ("logo", "logo-dark", "logo-auto", "mark"):
     cairosvg.svg2png(url=f"assets/{n}.svg", write_to=f"assets/{n}.png", scale=2)
 print(f"lockup {W:.0f}x{H:.0f}   mark {M}x{M}")
