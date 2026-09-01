@@ -91,14 +91,12 @@ func (p *Progress) Stop() {
 	close(p.stop)
 	p.wg.Wait()
 	if p.tty {
-		// Clear the bar line, then the quote line below it, and come back up so
-		// the summary prints where the bar was.
-		fmt.Print("\r\033[K\n\r\033[K\033[1A\r")
+		// Clear all three lines of the block, then come back to the top so the
+		// summary prints where the bar was.
+		fmt.Print("\r\033[K\n\r\033[K\n\r\033[K\033[2A\r")
 	}
 	d := time.Since(p.start).Round(time.Second)
-	// Trailing blank line so the summary is not glued to whatever comes next,
-	// which is usually the model-loading spinner.
-	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n\n",
+	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n",
 		humanBytes(p.done.Load()), d)
 }
 
@@ -138,8 +136,9 @@ func (p *Progress) render() {
 		bar, frac*100, humanBytes(done), humanBytes(total), humanBytes(int64(speed)), eta)
 	q := "  " + quotes[p.quote]
 
-	// Draw the bar, then the quote on the next line, then come back up.
-	fmt.Printf("\r\033[K%s\n\r\033[K\033[2m%s\033[0m\033[1A\r", line, q)
+	// Three lines: bar, a blank, then the quote. Redraw all three each tick and
+	// return the cursor to the top of the block.
+	fmt.Printf("\r\033[K%s\n\r\033[K\n\r\033[K\033[2m%s\033[0m\033[2A\r", line, q)
 }
 
 func humanBytes(n int64) string {
