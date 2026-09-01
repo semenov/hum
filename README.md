@@ -373,26 +373,19 @@ To override: `hum start --model /path/to/any/mlx/model`, or set
 
 It is also **faster than the alternatives**, measured rather than asserted.
 
-## The port
+## Access
 
-4242. Unassigned by IANA, and easy to remember, which is the point — a port you
-have to look up every time is a worse port than one that occasionally collides.
-It stays clear of 1234 (LM Studio), 11434 (Ollama) and the usual 8080/8000/3000.
+It listens on `127.0.0.1:4242` and has no authentication of any kind, the same
+as LM Studio and Ollama. Binding it wider means anyone who can reach the machine
+can use the model — fine at home, not in a cafe. Browsers are a separate door:
+no CORS headers are sent, so a page you visit cannot reach the server even
+though it runs on your own machine.
 
-    hum start --addr 127.0.0.1:8080     # a different port
-    hum start --addr 0.0.0.0:4242       # reachable from a VM or the network
-
-It binds to localhost by default. There is no authentication of any kind — the
-same as LM Studio and Ollama, both of which also bind localhost and ship no auth
-— so opening it to the network means anyone who can route to the machine can use
-the model. Fine at home, not in a cafe. When you do bind wide, `hum start` says
-so and prints the address other machines should use.
-
-Browsers are a separate door. By default no CORS headers are sent, so a page you
-visit cannot reach the server even though it runs on your own machine. Building
-a web app against it needs `--cors`, which lets *any* page reach it:
-
-    hum start --cors
+```sh
+hum start --addr 0.0.0.0:4242   # reachable from a VM or the network
+hum start --addr 127.0.0.1:8080 # if 4242 is taken
+hum start --cors                # let *any* web page reach it
+```
 
 ## Reasoning control
 
