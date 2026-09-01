@@ -41,6 +41,7 @@ type health struct {
 	Addr   string `json:"addr"`
 	PID    int    `json:"pid"`
 	Uptime int    `json:"uptime_s"`
+	MaxCtx int    `json:"max_context"`
 }
 
 func probe(addr string, timeout time.Duration) (health, error) {
@@ -183,6 +184,10 @@ func statusCmd(cfg Config) error {
 	u.OK("Hum is running.")
 	u.Para("It has been up for %s and is serving on http://%s.", dur(h.Uptime), h.Addr)
 	u.KV("Model", prettyModel(h.Model))
+	if h.MaxCtx > 0 {
+		u.KV("Context", fmt.Sprintf("%s tokens, measured against this Mac's memory",
+			commas(h.MaxCtx)))
+	}
 	u.KV("Process", strconv.Itoa(h.PID))
 	u.KV("Logs", short(logPath()))
 	u.Hint("Stop it with", "hum stop")

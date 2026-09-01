@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -156,4 +157,21 @@ func (s *Spinner) Stop() {
 	close(s.stop)
 	s.wg.Wait()
 	fmt.Print("\r\033[K")
+}
+
+// commas groups thousands, because a context ceiling is a number people
+// compare against other numbers and 154954 does not read as "about 155k".
+func commas(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }

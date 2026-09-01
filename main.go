@@ -124,6 +124,10 @@ type Worker struct {
 	in    io.WriteCloser
 	out   *bufio.Reader
 	vocab [][]byte
+	// Largest prompt this machine can hold, measured by the worker against the
+	// weights it actually loaded. Published so clients can plan, enforced so
+	// they do not have to.
+	maxContext int
 }
 
 func NewWorker(python, script, model string, entries int) (*Worker, error) {
@@ -154,13 +158,19 @@ func NewWorker(python, script, model string, entries int) (*Worker, error) {
 	if err != nil || b != 'R' {
 		return nil, fmt.Errorf("worker failed to start (got %q, err %v)", b, err)
 	}
+	var ctxBuf [4]byte
+	if _, err := io.ReadFull(br, ctxBuf[:]); err != nil {
+		return nil, fmt.Errorf("worker did not report a context ceiling: %w", err)
+	}
+	maxContext := int(binary.LittleEndian.Uint32(ctxBuf[:]))
 
 	vocab, err := loadVocab(vf.Name())
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("worker ready, vocab %d entries", len(vocab))
-	return &Worker{cmd: cmd, in: stdin, out: br, vocab: vocab}, nil
+	log.Printf("worker ready, vocab %d entries, context ceiling %d tokens",
+		len(vocab), maxContext)
+	return &Worker{cmd: cmd, in: stdin, out: br, vocab: vocab, maxContext: maxContext}, nil
 }
 
 func loadVocab(path string) ([][]byte, error) {
@@ -276,6 +286,29 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	})
 	if _, err := s.w.in.Write(append(wreq, '\n')); err != nil {
 		http.Error(rw, err.Error(), 500)
+		return
+	}
+
+	// The worker answers with the prompt length before it does anything with
+	// it, so an oversized prompt costs a tokenisation rather than a swap storm.
+	// 'C' (cache reuse) otherwise, which nothing downstream reads.
+	first, err := s.w.next()
+	if err != nil {
+		http.Error(rw, err.Error(), 500)
+		return
+	}
+	if first.kind == 'X' {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(rw).Encode(map[string]any{"error": map[string]any{
+			"message": fmt.Sprintf("This prompt is %d tokens and the limit is %d, "+
+				"which is what fits in this Mac's memory alongside the model's "+
+				"weights. Send less, or run hum on a Mac with more memory.",
+				first.val, s.w.maxContext),
+			"type":  "invalid_request_error",
+			"param": "messages",
+			"code":  "context_length_exceeded",
+		}})
 		return
 	}
 
@@ -554,9 +587,12 @@ func runServer(cfg Config) error {
 		json.NewEncoder(rw).Encode(map[string]any{"object": "list",
 			"data": []any{map[string]any{
 				"id": ModelID, "object": "model", "owned_by": "hum",
-				// Not in the OpenAI schema, but this is the only place a client
-				// can find out what it is actually talking to.
+				// None of these are in the OpenAI schema, but this is the only
+				// place a client can find out what it is talking to and how much
+				// of it there is. context_length is the spelling OpenRouter and
+				// OpenCode already read.
 				"name": prettyModel(cfg.Model), "path": cfg.Model,
+				"context_length": w.maxContext,
 			}}})
 	})
 	// Health is what `hum start` polls to know the model finished loading, and
@@ -566,6 +602,7 @@ func runServer(cfg Config) error {
 		json.NewEncoder(rw).Encode(map[string]any{
 			"status": "ok", "model": cfg.Model, "addr": cfg.Addr,
 			"pid": os.Getpid(), "uptime_s": int(time.Since(started).Seconds()),
+			"max_context": w.maxContext,
 		})
 	})
 	var h http.Handler = mux

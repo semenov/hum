@@ -340,7 +340,91 @@ def prepare(ids):
     return make_prompt_cache(model), ids, 0
 
 
-out.write(b"R"); out.flush()
+def _nbytes(a):
+    if isinstance(a, mx.array):
+        return a.nbytes
+    if isinstance(a, (list, tuple)):
+        return sum(_nbytes(x) for x in a)
+    return 0
+
+
+def _cache_bytes(n):
+    """Bytes of cache after running n tokens through the model.
+
+    Measured on the cache arrays themselves, not on process memory: a forward
+    pass also materialises logits, and at 248k vocab those are a gigabyte for a
+    2048-token chunk, which swamps the thing being measured.
+    """
+    c = make_prompt_cache(model)
+    model(mx.zeros((1, n), dtype=mx.uint32), cache=c)
+    mx.eval([x.state for x in c])
+    used = sum(_nbytes(x.state) for x in c)
+    del c
+    mx.clear_cache()
+    return used
+
+
+def kv_bytes_per_token(small=256, large=2048):
+    """Measure what one token of context costs, rather than assume it.
+
+    Two thirds of this model's layers are linear-attention whose state is a
+    fixed size however long the conversation runs, and that fixed part is tens
+    of megabytes. Measuring one prompt and dividing would charge all of it to
+    the tokens in that prompt and undercount the ceiling by an order of
+    magnitude. Two sizes subtract the constant and leave the slope.
+    """
+    lo, hi = _cache_bytes(small), _cache_bytes(large)
+    per = (hi - lo) // (large - small)
+    print(f"cache probe: {small} tok = {lo/2**20:.0f} MB, "
+          f"{large} tok = {hi/2**20:.0f} MB, slope {per/1024:.1f} KB/token",
+          file=sys.stderr, flush=True)
+    return max(1, per)
+
+
+def model_window():
+    """The model's own limit, from whichever field the config uses."""
+    try:
+        cfg = json.load(open(os.path.join(MODEL_PATH, "config.json")))
+    except Exception:
+        return 0
+    for d in (cfg, cfg.get("text_config") or {}):
+        n = d.get("max_position_embeddings")
+        if isinstance(n, int) and n > 0:
+            return n
+    return 0
+
+
+def max_context():
+    """Largest prompt this machine can hold, in tokens.
+
+    Refusing an oversized prompt is the only way a client can find out; the
+    OpenAI API has no field for it and the failure mode without it is not an
+    error but a Mac that starts swapping. Metal reports the working set it is
+    willing to give us, the model reports its own window, and the rest is
+    measured: what is left after the weights, the prefill transient and some
+    slack, divided by the cost of a token.
+    """
+    window = model_window() or 262144
+    ws = mx.device_info().get("max_recommended_working_set_size", 0)
+    if not ws:
+        return window
+    loaded = mx.get_active_memory()
+    room = ws - loaded - PREFILL_BUDGET - (2 << 30)
+    print(f"working set {ws/2**30:.1f} GB, weights {loaded/2**30:.1f} GB, "
+          f"room {room/2**30:.1f} GB", file=sys.stderr, flush=True)
+    if room <= 0:
+        return 4096
+    # The cache arrays are only half of what the process pays for them. A
+    # KVCache grows by allocating a larger buffer and copying, so at the moment
+    # of growth both exist, and measurement bears it out: the arrays come to
+    # 20 KB per token on this model while resident memory grows by 40.
+    per_token = 2 * kv_bytes_per_token()
+    return max(4096, min(window, int(room // per_token)))
+
+
+MAX_CONTEXT = max_context()
+print(f"context ceiling {MAX_CONTEXT} tokens", file=sys.stderr, flush=True)
+out.write(b"R" + struct.pack("<I", MAX_CONTEXT)); out.flush()
 
 # ---- serve -----------------------------------------------------------------
 for line in sys.stdin:
@@ -352,6 +436,12 @@ for line in sys.stdin:
     msgs = normalise(req["messages"])
     prompt = render(msgs, True, tools, think)
     n_stable = stable_len(msgs, prompt, tools, think)
+
+    if len(prompt) > MAX_CONTEXT:
+        out.write(b"X" + struct.pack("<I", len(prompt))); out.flush()
+        print(f"refused {len(prompt)} tokens, ceiling {MAX_CONTEXT}",
+              file=sys.stderr, flush=True)
+        continue
 
     cache, todo, n_reused = prepare(prompt)
     out.write(b"C" + struct.pack("<I", n_reused))
