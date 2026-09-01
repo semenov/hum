@@ -38,6 +38,7 @@ PREFILL_BUDGET = 2 << 30      # bytes of transient we are willing to spend
 PREFILL_PER_PAIR = 44         # measured bytes per (chunk token * context token)
 PREFILL_CHUNK_MAX = 2048
 PREFILL_CHUNK_MIN = 256
+WATCH_DEBUG = os.environ.get("HUM_WATCH_DEBUG") == "1"
 FIXED_CHUNK = int(os.environ.get("HUM_PREFILL_CHUNK", "0"))
 
 
@@ -144,6 +145,10 @@ class _Watcher:
     def _generated(self, tokens):
         if self.seen < 0:
             self.seen = tokens.size
+            if WATCH_DEBUG:
+                print(f"[watch] {type(self).__name__} first call sees "
+                      f"{tokens.size} tokens: {tokens[-6:].tolist()}",
+                      file=sys.stderr, flush=True)
             return []
         new = tokens[self.seen:].tolist()
         self.seen = tokens.size
@@ -197,14 +202,22 @@ class JSONGuard(_Watcher):
         self.armed = not wait_for_think
         self.matcher = llguidance.LLMatcher(self.llt, self.grammar) if self.armed else None
         self.bitmask = None
+        self.n_waited = 0
+        self.waited_tail = []
 
     def _arm(self):
         self.armed = True
         self.matcher = llguidance.LLMatcher(self.llt, self.grammar)
+        if WATCH_DEBUG:
+            print(f"[watch] JSONGuard armed after {self.n_waited} tokens",
+                  file=sys.stderr, flush=True)
 
     def __call__(self, tokens, logits):
         for t in self._generated(tokens):
             if not self.armed:
+                self.n_waited += 1
+                if WATCH_DEBUG:
+                    self.waited_tail = (self.waited_tail + [t])[-12:]
                 if t == THINK_CLOSE:
                     self._arm()
                 continue

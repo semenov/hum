@@ -629,10 +629,21 @@ json.loads(r.choices[0].message.content)
 free: measured at 90.2 tok/s unconstrained against 90.4 with a schema, which is
 to say the masking disappears into the noise of an 11 ms decode step.
 
-**Reasoning still happens.** The grammar is armed only once the think block
-closes, so the model reasons in prose and is then held to the shape — you get
-both, rather than choosing. `message.reasoning` carries the thinking and
-`message.content` is the JSON.
+**Reasoning is off by default here, and that is deliberate.** The grammar is
+armed only once the think block closes, so the two *can* compose — the model
+reasons in prose, then has to produce the object, with `message.reasoning`
+carrying the thinking. But on this model they compose badly. After a thousand
+tokens of prose it writes numbers the way a person would, with separators, and
+a comma inside a JSON number is not legal, so the only tokens the grammar
+leaves are more digits: it emits zeros until it runs out of budget. Measured on
+eight cities, `{"population": <integer>}` parsed 8 times out of 8 with
+reasoning off and 2 out of 4 with it on.
+
+So a `response_format` request that says nothing about reasoning gets none. Say
+something — `reasoning`, `reasoning_effort` or `include_reasoning`, any of the
+three — and you get exactly what you asked for, runaway integers included. If
+you want both, bound the numeric fields (`maximum`, or a string with a
+`pattern`) and the failure cannot happen.
 
 Enums, nested objects, arrays with `minItems` and integer types are all
 enforced, since llguidance compiles the schema rather than approximating it. If

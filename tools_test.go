@@ -146,3 +146,35 @@ func TestResponseFormatGrammar(t *testing.T) {
 		})
 	}
 }
+
+func TestStructuredOutputTurnsThinkingOff(t *testing.T) {
+	no := false
+	jsonReq := &ResponseFormat{Type: "json_object"}
+	cases := []struct {
+		name      string
+		req       ChatReq
+		wantThink bool
+	}{
+		{"plain request still thinks", ChatReq{}, true},
+		{"schema alone turns it off", ChatReq{ResponseFormat: jsonReq}, false},
+		// Asking for reasoning explicitly beats hum's preference, in all three
+		// spellings the ecosystem uses.
+		{"explicit effort wins", ChatReq{ResponseFormat: jsonReq, ReasoningEffort: "high"}, true},
+		{"explicit object wins", ChatReq{ResponseFormat: jsonReq,
+			Reasoning: &ReasoningReq{Effort: "low"}}, true},
+		{"include_reasoning counts as asking", ChatReq{ResponseFormat: jsonReq,
+			IncludeReason: &no}, true},
+		{"text format is not structured", ChatReq{ResponseFormat: &ResponseFormat{Type: "text"}}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := c.req.reasoning()
+			if c.req.ResponseFormat.grammar() != nil && !c.req.reasoningRequested() {
+				plan.think = false
+			}
+			if plan.think != c.wantThink {
+				t.Errorf("think = %v, want %v", plan.think, c.wantThink)
+			}
+		})
+	}
+}

@@ -120,6 +120,12 @@ func effortBudget(effort string) (think bool, budget int, ok bool) {
 	return true, 0, false
 }
 
+// reasoningRequested reports whether the caller said anything about reasoning
+// at all, in any of the three spellings. Silence is what lets hum choose.
+func (r ChatReq) reasoningRequested() bool {
+	return r.Reasoning != nil || r.ReasoningEffort != "" || r.IncludeReason != nil
+}
+
 func (r ChatReq) reasoning() reasoningPlan {
 	p := reasoningPlan{think: true}
 	if r.ReasoningEffort != "" {
@@ -394,6 +400,16 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	plan := req.reasoning()
+	// Structured output and long reasoning do not mix well on this model.
+	// After a thousand tokens of prose the model tends to write a number the
+	// way a person would, with separators, and the grammar forbids a comma
+	// inside a JSON number -- so the only tokens left are more digits, and it
+	// emits zeros until it runs out of budget. Measured: 8 of 8 schema
+	// requests parse with reasoning off, 2 of 4 with it on. A caller who names
+	// a reasoning setting still gets exactly what they asked for.
+	if req.ResponseFormat.grammar() != nil && !req.reasoningRequested() {
+		plan.think = false
+	}
 	reqID, ch, err := s.w.submit(map[string]any{
 		"messages": req.Messages, "max_tokens": req.MaxTokens,
 		"temp": temp, "top_p": topP, "tools": req.Tools,
