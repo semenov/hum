@@ -21,7 +21,7 @@ import llguidance.numpy
 from mlx_lm.utils import load
 from mlx_lm.generate import BatchGenerator
 from mlx_lm.models.cache import make_prompt_cache
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
 MODEL_PATH, VOCAB_OUT = sys.argv[1], sys.argv[2]
 CACHE_ENTRIES = int(sys.argv[3]) if len(sys.argv) > 3 else 4
@@ -593,7 +593,23 @@ def render_request(req):
     # prompt goes in: that boundary is what the next turn can still match.
     snap_after = len(head_segs) if (cut == n_stable and head_segs) else -1
 
-    procs = []
+    # Penalties run before any grammar, so what the grammar allows stays the
+    # last word: a masked token stays masked. They are also the only defence
+    # against a model that has got stuck, since a constrained decoder can mask
+    # the token it wanted and leave it looping on the one it will settle for.
+    bias = req.get("logit_bias") or {}
+    procs = make_logits_processors(
+        logit_bias={int(k): float(v) for k, v in bias.items()} or None,
+        repetition_penalty=req.get("repetition_penalty"),
+        presence_penalty=req.get("presence_penalty"),
+        frequency_penalty=req.get("frequency_penalty"),
+    )
+    if WATCH_DEBUG:
+        print(f"[watch] penalties rep={req.get('repetition_penalty')} "
+              f"freq={req.get('frequency_penalty')} pres={req.get('presence_penalty')} "
+              f"bias={len(bias)} -> {len(procs)} processors", file=sys.stderr, flush=True)
+    # response_format wins over tools: asking for both is contradictory, and a
+    # caller who wants a shape back wants it more than a function call.
     schema = req.get("json_schema")
     if schema is not None:
         procs.append(JSONGuard(None if schema is True else schema,

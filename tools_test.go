@@ -178,3 +178,33 @@ func TestStructuredOutputTurnsThinkingOff(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerPayloadCarriesSampling(t *testing.T) {
+	f := 1.5
+	req := ChatReq{
+		MaxTokens:         64,
+		FrequencyPenalty:  &f,
+		RepetitionPenalty: &f,
+		LogitBias:         map[string]float64{"77916": -100},
+	}
+	got, err := json.Marshal(req.workerPayload(reasoningPlan{think: true}, 0.7, 1.0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["frequency_penalty"] != 1.5 || m["repetition_penalty"] != 1.5 {
+		t.Errorf("penalties did not survive: %s", got)
+	}
+	// An unset penalty must arrive as null, not as zero: zero is a value the
+	// caller can legitimately send and it means something different.
+	if m["presence_penalty"] != nil {
+		t.Errorf("unset presence_penalty should be null, got %v", m["presence_penalty"])
+	}
+	bias, ok := m["logit_bias"].(map[string]any)
+	if !ok || bias["77916"] != -100.0 {
+		t.Errorf("logit_bias did not survive: %s", got)
+	}
+}

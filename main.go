@@ -46,6 +46,14 @@ type ChatReq struct {
 
 	ResponseFormat *ResponseFormat `json:"response_format"`
 
+	// Sampling penalties. frequency and presence are OpenAI's; repetition is
+	// not, but every local runtime has it and it is the one that actually
+	// breaks a token the model has got stuck on.
+	FrequencyPenalty  *float64           `json:"frequency_penalty"`
+	PresencePenalty   *float64           `json:"presence_penalty"`
+	RepetitionPenalty *float64           `json:"repetition_penalty"`
+	LogitBias         map[string]float64 `json:"logit_bias"`
+
 	// Reasoning control, in all three shapes the ecosystem uses.
 	Reasoning       *ReasoningReq `json:"reasoning"`
 	ReasoningEffort string        `json:"reasoning_effort"`
@@ -155,6 +163,20 @@ func (r ChatReq) reasoning() reasoningPlan {
 		}
 	}
 	return p
+}
+
+// workerPayload is everything the worker needs about a request. Kept apart
+// from the handler so what crosses the pipe can be tested without a model
+// behind it.
+func (r ChatReq) workerPayload(plan reasoningPlan, temp, topP float64) map[string]any {
+	return map[string]any{
+		"messages": r.Messages, "max_tokens": r.MaxTokens,
+		"temp": temp, "top_p": topP, "tools": r.Tools,
+		"enable_thinking": plan.think, "think_budget": plan.budget,
+		"json_schema":       r.ResponseFormat.grammar(),
+		"frequency_penalty": r.FrequencyPenalty, "presence_penalty": r.PresencePenalty,
+		"repetition_penalty": r.RepetitionPenalty, "logit_bias": r.LogitBias,
+	}
 }
 
 // ---- worker ---------------------------------------------------------------
@@ -410,12 +432,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	if req.ResponseFormat.grammar() != nil && !req.reasoningRequested() {
 		plan.think = false
 	}
-	reqID, ch, err := s.w.submit(map[string]any{
-		"messages": req.Messages, "max_tokens": req.MaxTokens,
-		"temp": temp, "top_p": topP, "tools": req.Tools,
-		"enable_thinking": plan.think, "think_budget": plan.budget,
-		"json_schema": req.ResponseFormat.grammar(),
-	})
+	reqID, ch, err := s.w.submit(req.workerPayload(plan, temp, topP))
 	if err != nil {
 		http.Error(rw, err.Error(), 500)
 		return

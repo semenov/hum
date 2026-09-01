@@ -651,6 +651,34 @@ you send `tools` and `response_format` together, the schema wins: asking for
 both is contradictory, and a caller who wants a shape back wants it more than a
 function call.
 
+## Sampling
+
+Beyond `temperature` and `top_p`:
+
+| | |
+|---|---|
+| `frequency_penalty` | subtracts from a token's logit per time it has appeared |
+| `presence_penalty` | subtracts once if it has appeared at all |
+| `repetition_penalty` | divides the logit of anything in the last 20 tokens |
+| `logit_bias` | `{"77916": -100}` — added straight to that token's logit |
+
+`repetition_penalty` is not an OpenAI parameter, but every local runtime has it
+and mlx-lm implements it, so it is here too. Unset means unset: a penalty you
+do not send is not the same as sending zero, and hum passes the difference
+through rather than flattening it.
+
+Worth knowing that these fight the model's confidence rather than overruling
+it. Asked for "banana ten times" at temperature 0, `frequency_penalty` of 1.5
+and even 3 changes nothing, because the gap between banana and everything else
+is enormous; at 8 the output finally breaks apart. `logit_bias` is the blunt
+one — ban the token for " Lisbon" and the answer comes back "Lisboa".
+
+They are **not** a fix for a runaway inside a JSON schema, which was why I
+built them. Penalising recent digits makes the model choose different digits,
+not close the number: measured, `repetition_penalty` of 1.1 turned
+`231900000000` into `2319705186000`. Bounding the schema is the fix, because
+that is the only thing that makes another digit illegal.
+
 ## Limitations
 
 - Context is bounded by memory rather than by a setting. Nothing stops you
@@ -664,8 +692,7 @@ function call.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.
-- Not implemented: `tool_choice`, `logprobs`, `n`, `seed`,
-  `frequency_penalty` / `presence_penalty`, LoRA.
+- Not implemented: `tool_choice`, `logprobs`, `n`, `seed`, LoRA.
 - No auth and no request limits — do not expose this to a network.
 - Prompt-cache reuse is not bit-deterministic: resuming from a snapshot changes
   prefill chunk boundaries, which changes rounding, which can flip a token.
