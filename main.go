@@ -9,7 +9,6 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -420,26 +419,29 @@ func writeJSONString(w *bufio.Writer, s string) {
 	w.WriteByte('"')
 }
 
-func main() {
-	var python, script, model, addr string
-	flag.StringVar(&python, "python", "python3", "python interpreter")
-	flag.StringVar(&script, "worker", "worker.py", "worker script")
-	flag.StringVar(&model, "model", "", "model path")
-	flag.StringVar(&addr, "addr", "127.0.0.1:8090", "listen address")
-	entries := flag.Int("cache-entries", 4, "conversations kept in the prompt cache")
-	flag.Parse()
-
-	w, err := NewWorker(python, script, model, *entries)
+// runServer loads the model and serves until killed. This is the foreground
+// path; `hum start` re-execs the binary into it as a detached child.
+func runServer(cfg Config) error {
+	w, err := NewWorker(cfg.Python, cfg.Worker, cfg.Model, cfg.CacheEntries)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	s := &Server{w: w, model: model}
+	s := &Server{w: w, model: cfg.Model}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.chat)
 	mux.HandleFunc("/v1/models", func(rw http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(rw).Encode(map[string]any{"object": "list",
-			"data": []any{map[string]any{"id": model, "object": "model"}}})
+			"data": []any{map[string]any{"id": cfg.Model, "object": "model"}}})
 	})
-	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	// Health is what `hum start` polls to know the model finished loading, and
+	// what `hum status` reports.
+	started := time.Now()
+	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(rw).Encode(map[string]any{
+			"status": "ok", "model": cfg.Model, "addr": cfg.Addr,
+			"pid": os.Getpid(), "uptime_s": int(time.Since(started).Seconds()),
+		})
+	})
+	log.Printf("listening on %s", cfg.Addr)
+	return http.ListenAndServe(cfg.Addr, mux)
 }

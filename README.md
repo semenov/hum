@@ -62,8 +62,21 @@ detokenizer over a 220-token temp=0 generation including Cyrillic.
 ## Run
 
     go build -o hum .
-    ./hum -python /path/to/venv/bin/python -worker worker.py \
-            -model /path/to/model -addr 127.0.0.1:8090
+    hum start --model ~/models/Qwen3.6-35B-A3B-MLX-4bit
+
+`start` daemonises, waits until the model is actually loaded, then returns —
+so the next command can rely on the server being up. The model path is saved to
+`~/.hum/config.json`, so afterwards a bare `hum start` is enough.
+
+    hum start      start in the background and return
+    hum stop       stop it (kills the process group, so the worker goes too)
+    hum restart    stop then start
+    hum status     running? where? which model? how long?
+    hum logs -f    follow the log
+    hum serve      run in the foreground, for debugging
+    hum config     show the saved configuration
+
+State lives in `~/.hum/`: `config.json`, `hum.pid`, `hum.log`.
 
 ## Tool calling
 
