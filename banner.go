@@ -78,15 +78,6 @@ func (p palette) fade(s string) string {
 
 // ---- art ------------------------------------------------------------------
 
-// A case fan, echoing the project logo, beside the wordmark.
-var fanArt = []string{
-	"╭─────────╮",
-	"│ ╲  │  ╱ │",
-	"│ ── ● ── │",
-	"│ ╱  │  ╲ │",
-	"╰─────────╯",
-}
-
 var wordArt = []string{
 	"██   ██  ██    ██  ███    ███",
 	"██   ██  ██    ██  ████  ████",
@@ -98,11 +89,9 @@ var wordArt = []string{
 func banner(p palette) string {
 	var b strings.Builder
 	b.WriteString("\n")
-	for i := range wordArt {
+	for _, line := range wordArt {
 		b.WriteString("  ")
-		b.WriteString(p.green(fanArt[i]))
-		b.WriteString("   ")
-		b.WriteString(p.fade(wordArt[i]))
+		b.WriteString(p.fade(line))
 		b.WriteString("\n")
 	}
 	return b.String()
