@@ -4,3 +4,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# fonts are fetched on demand by assets/make-logo.py
+assets/fonts/
