@@ -278,13 +278,24 @@ State lives in `~/.hum/`: `config.json`, `hum.pid`, `hum.log`.
 
 ## Install
 
-Needs Go 1.24+, and a Python with `mlx-lm` and `llguidance` for the worker.
+```sh
+brew tap semenov/hum https://github.com/semenov/hum
+brew install --HEAD hum
+```
+
+The formula builds the binary and creates its own virtualenv with `mlx-lm` and
+`llguidance` inside, so nothing is installed into your Python and there is
+nothing to configure afterwards. Takes about a minute.
+
+Apple Silicon only — `mlx` has no other target.
+
+### From a checkout
 
 ```sh
 git clone https://github.com/semenov/hum && cd hum
+python3 -m venv .venv && .venv/bin/pip install mlx-lm llguidance
 go build -o hum .
-pip install mlx-lm llguidance
-hum start --python $(which python3)
+./hum start --python .venv/bin/python
 ```
 
 ## Limitations
