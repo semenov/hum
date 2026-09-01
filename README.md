@@ -289,6 +289,16 @@ budget, turn the thinking off instead: `{"reasoning": {"effort": "none"}}`.
 Calling from a browser needs `hum start --cors`, which is off by default
 because any page you have open could otherwise reach the server.
 
+## Using it from a coding agent
+
+Not as the agent's brain — a 35B model will not out-think a frontier one. As
+somewhere to send the work that eats context and tokens without needing
+judgement: squashing a build log before your expensive model reads it, first-pass
+descriptions of forty files, classification, drafts. It is free, unlimited, and
+takes eight requests at once, which makes `xargs -P 8` the natural shape.
+[**OFFLOADING.md**](OFFLOADING.md) has the rule, measured recipes, and a block
+to paste into `CLAUDE.md` or `AGENTS.md`.
+
 ## The commands
 
 ```
