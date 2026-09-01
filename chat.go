@@ -17,22 +17,14 @@ import (
 func chatCmd(cfg Config) error {
 	u := newUI()
 
-	// Only resolve a model when nothing is serving yet: otherwise `hum chat`
-	// against a running server could start a multi-gigabyte download for a model
-	// it is not going to use.
+	// chat is a client, nothing more: it neither downloads nor starts anything.
 	if _, alive := readPID(); !alive {
-		u.Off("Hum is not running yet.")
-		u.Para("Starting it first. If the model still has to be downloaded this " +
-			"will take a while; otherwise a few seconds.")
-		if err := cfg.resolveModel(false); err != nil {
-			return err
-		}
-		if err := saveConfig(cfg); err != nil {
-			return err
-		}
-		if err := startDaemon(cfg, 30*time.Minute); err != nil {
-			return err
-		}
+		u.Off("Hum is not running.")
+		u.Para("Chat needs a server to talk to. Start one first — the model is " +
+			"downloaded on the first run, which takes a while, and loaded on every " +
+			"run, which takes a few seconds.")
+		u.Hint("Start it with", "hum start")
+		return nil
 	}
 	h, err := probe(cfg.Addr, 5*time.Second)
 	if err != nil {
