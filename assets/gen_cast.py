@@ -2,7 +2,10 @@
 
     python3 assets/gen_cast.py
     agg --theme github-dark --font-size 26 --cols 96 --rows 30 \
-        assets/demo.cast assets/demo.gif
+        --last-frame-duration 4 assets/demo.cast assets/demo.gif
+
+--last-frame-duration holds on the answer before the loop restarts; without it
+the result flashes past in the time it takes to read one line.
 
 The cast is written rather than recorded, so the pacing is chosen instead of
 waited out — a real recording spends twenty seconds compiling and nine more
@@ -71,7 +74,6 @@ events = [
     (12.9, "Trajan\r\n"),
     (13.2, "Marcus Aurelius\r\n"),
     (13.6, PROMPT),
-    (15.0, ""),
 ]
 
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo.cast")
