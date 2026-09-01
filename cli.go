@@ -29,7 +29,8 @@ func main() {
 	cfg, _ := loadConfig() // absent config is fine; defaults apply
 
 	fail := func(err error) {
-		fmt.Fprintln(os.Stderr, "hum: "+err.Error())
+		newUI().Fail("%s", err.Error())
+		fmt.Fprintln(os.Stderr)
 		os.Exit(1)
 	}
 
@@ -97,32 +98,50 @@ func main() {
 		}
 
 	case "model":
+		u := newUI()
 		spec := pickModel()
 		dir := modelDir(spec.Repo)
-		state := "not downloaded"
-		if haveModel(dir) {
-			state = "ready"
-		}
-		size := ""
+		u.Head("MODEL", "chosen for this machine")
+		u.KV("memory", humanBytes(systemRAM())+" unified")
+		u.KV("selected", spec.Name)
 		if spec.Bytes > 0 {
-			size = " (" + humanBytes(spec.Bytes) + ")"
+			u.KV("download", humanBytes(spec.Bytes))
 		}
-		fmt.Printf("system memory  %s\nselected       %s%s\nrepo           %s\nlocation       %s\nstatus         %s\n",
-			humanBytes(systemRAM()), spec.Name, size, spec.Repo, short(dir), state)
+		u.KV("repo", spec.Repo)
+		u.KV("path", short(dir))
+		if haveModel(dir) {
+			u.KV("status", "ready")
+		} else if haveModel(cfg.Model) {
+			u.KV("status", "using "+short(cfg.Model))
+		} else {
+			u.KV("status", "not downloaded yet")
+			u.Hint("fetch it with", "hum start")
+		}
+		u.Blank()
 
 	case "config":
-		fmt.Printf("model         %s\naddr          %s\npython        %s\nworker        %s\ncache-entries %d\nconfig file   %s\n",
-			short(cfg.Model), cfg.Addr, short(cfg.Python), short(cfg.Worker),
-			cfg.CacheEntries, short(pathIn("config.json")))
+		u := newUI()
+		u.Head("CONFIG", short(pathIn("config.json")))
+		u.KV("model", short(cfg.Model))
+		u.KV("address", cfg.Addr)
+		u.KV("python", short(cfg.Python))
+		u.KV("worker", short(cfg.Worker))
+		u.KV("cache", fmt.Sprintf("%d conversations", cfg.CacheEntries))
+		u.Blank()
 
 	case "version", "-v", "--version":
-		fmt.Println("hum " + version)
+		u := newUI()
+		u.Head("hum "+version, "a fast local LLM server for Apple Silicon")
+		u.Blank()
 
 	case "help", "-h", "--help":
 		fmt.Print(helpText())
 
 	default:
-		fmt.Fprintf(os.Stderr, "hum: unknown command %q\nrun `hum help` to see what it can do\n", cmd)
+		u := newUI()
+		u.Fail("unknown command %q", cmd)
+		u.Hint("see what it can do with", "hum help")
+		u.Blank()
 		os.Exit(2)
 	}
 }

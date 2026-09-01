@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,19 +91,28 @@ func startDaemon(cfg Config, wait time.Duration) error {
 	}
 	_ = cmd.Process.Release()
 
-	fmt.Printf("starting hum (pid %d), loading %s\n", pid, short(cfg.Model))
+	u := newUI()
+	sp := u.Spin("loading " + filepath.Base(cfg.Model))
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
-			return fmt.Errorf("worker died during startup — see %s", logPath())
+			sp.Stop()
+			return fmt.Errorf("the worker died while starting — run `hum logs` to see why")
 		}
 		if _, err := probe(cfg.Addr, 2*time.Second); err == nil {
-			fmt.Printf("ready on http://%s  (logs: %s)\n", cfg.Addr, logPath())
+			sp.Stop()
+			u.OK("hum is ready")
+			u.KV("address", "http://"+cfg.Addr)
+			u.KV("model", filepath.Base(cfg.Model))
+			u.KV("pid", strconv.Itoa(pid))
+			u.Hint("logs at", short(logPath()))
+			u.Blank()
 			return nil
 		}
 		time.Sleep(400 * time.Millisecond)
 	}
-	return fmt.Errorf("timed out after %s waiting for the model — see %s", wait, logPath())
+	sp.Stop()
+	return fmt.Errorf("gave up after %s waiting for the model — run `hum logs` to see why", wait)
 }
 
 func stopDaemon(timeout time.Duration) error {
@@ -115,43 +125,52 @@ func stopDaemon(timeout time.Duration) error {
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 	}
+	u := newUI()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
 			os.Remove(pidPath())
-			fmt.Printf("stopped (pid %d)\n", pid)
+			u.Off("hum stopped")
+			u.Blank()
 			return nil
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	os.Remove(pidPath())
-	fmt.Printf("stopped (pid %d, forced)\n", pid)
+	u.Off("hum stopped (forced)")
+	u.Blank()
 	return nil
 }
 
 func statusCmd(cfg Config) error {
+	u := newUI()
 	pid, alive := readPID()
 	if !alive {
-		fmt.Println("hum is not running")
+		u.Off("hum is not running")
 		if cfg.Model != "" {
-			fmt.Printf("  model  %s\n", short(cfg.Model))
-			fmt.Printf("  addr   %s\n", cfg.Addr)
+			u.KV("model", filepath.Base(cfg.Model))
+			u.KV("address", cfg.Addr)
 		}
+		u.Hint("start it with", "hum start")
+		u.Blank()
 		return nil
 	}
 	h, err := probe(cfg.Addr, 3*time.Second)
 	if err != nil {
-		fmt.Printf("hum is starting (pid %d) — model still loading\n", pid)
-		fmt.Printf("  logs   %s\n", logPath())
+		u.Off("hum is starting — the model is still loading")
+		u.KV("pid", strconv.Itoa(pid))
+		u.Hint("follow along with", "hum logs -f")
+		u.Blank()
 		return nil
 	}
-	fmt.Println("hum is running")
-	fmt.Printf("  pid    %d\n", h.PID)
-	fmt.Printf("  addr   http://%s\n", h.Addr)
-	fmt.Printf("  model  %s\n", short(h.Model))
-	fmt.Printf("  uptime %s\n", dur(h.Uptime))
-	fmt.Printf("  logs   %s\n", logPath())
+	u.OK("hum is running")
+	u.KV("address", "http://"+h.Addr)
+	u.KV("model", filepath.Base(h.Model))
+	u.KV("uptime", dur(h.Uptime))
+	u.KV("pid", strconv.Itoa(h.PID))
+	u.Hint("logs at", short(logPath()))
+	u.Blank()
 	return nil
 }
 
