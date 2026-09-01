@@ -171,6 +171,12 @@ func EnsureModel(spec ModelSpec) (string, error) {
 	u.Para("The download is %s and happens only this once. It resumes where it "+
 		"left off if interrupted, so it is safe to stop and come back later.",
 		humanBytes(total))
+	u.Para("Now is a good moment to step away — nothing else is needed from you, " +
+		"and hum will start serving the moment this finishes.")
+	u.Para("What you get at the end is worth the wait: this model runs entirely " +
+		"on your own Mac. No account, no API key, no per-token bill, no rate " +
+		"limits, and nothing you type ever leaves the machine. It keeps working " +
+		"on a plane, and it will still work in ten years.")
 	p := NewProgress(total)
 	p.Add(already)
 	p.Start()

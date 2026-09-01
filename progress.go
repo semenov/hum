@@ -55,6 +55,7 @@ type Progress struct {
 	rateAt    time.Time
 	rateBytes int64
 	smoothed  float64 // bytes/s, exponentially weighted
+	samples   int
 	rateText  string
 	etaText   string
 }
@@ -144,17 +145,24 @@ func (p *Progress) render() {
 		now := time.Now()
 		if dt := now.Sub(p.rateAt).Seconds(); dt > 0 && !p.rateAt.IsZero() {
 			inst := float64(done-p.rateBytes) / dt
-			if p.smoothed == 0 {
+			switch {
+			case p.samples == 0:
+				// Discard the first window: it contains DNS, TLS and TCP ramp-up,
+				// so seeding from it drags the estimate down for half a minute.
+			case p.smoothed == 0:
 				p.smoothed = inst
-			} else {
-				p.smoothed = 0.7*p.smoothed + 0.3*inst
+			default:
+				p.smoothed = 0.5*p.smoothed + 0.5*inst
 			}
-		} else {
-			p.smoothed = speed
+			p.samples++
 		}
 		p.rateAt, p.rateBytes = now, done
-		p.rateText = humanBytes(int64(p.smoothed)) + "/s"
-		p.etaText = "--"
+		if p.smoothed == 0 {
+			p.rateText = "…"
+			p.etaText = "--"
+		} else {
+			p.rateText = humanBytes(int64(p.smoothed)) + "/s"
+		}
 		if p.smoothed > 0 && done < total {
 			p.etaText = etaMinutes(float64(total-done) / p.smoothed)
 		}
