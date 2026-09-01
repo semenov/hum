@@ -14,8 +14,13 @@
 
 ```sh
 brew tap semenov/hum https://github.com/semenov/hum
+brew trust semenov/hum
 brew install --HEAD hum
 ```
+
+`brew trust` is a one-off. Homebrew refuses to build a formula from a tap it has
+not been told to trust, which is fair — a formula is a script that runs on your
+machine.
 
 Then:
 
