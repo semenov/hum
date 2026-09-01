@@ -49,6 +49,9 @@ func main() {
 				explicit = true
 			}
 		})
+		if err := checkArch(newUI()); err != nil {
+			os.Exit(1)
+		}
 		if err := cfg.resolveModel(explicit); err != nil {
 			fail(err)
 		}
