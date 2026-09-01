@@ -35,13 +35,21 @@ INK_L, INK_D = "#0B0D0E", "#F2F4F8"
 # where a renderer supports neither <picture> nor a colour scheme.
 INK_AUTO = "#787888"
 PAPER_MARK   = "#08090C"
-CY, MG       = "#22D3EE", "#F0509A"
+# Green is the console green; magenta is what carries the wordmark on a
+# white background, where a light colour would wash out (1.8:1 against
+# magenta's 3.3:1). Adjacent hues would blur the split, so the pair stays
+# complementary.
+CY, MG       = "#3DDC84", "#F0509A"
 
 f = TTFont(FONT); GS = f.getGlyphSet(); CMAP = f.getBestCmap()
 UPM = f["head"].unitsPerEm; HMTX = f["hmtx"]
 
+# Green and magenta are complementary, so a straight blend between them passes
+# through grey and the shroud goes muddy. A cyan waypoint keeps it saturated.
 GRAD = (f'<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
-        f'<stop offset="0" stop-color="{CY}"/><stop offset="1" stop-color="{MG}"/></linearGradient>')
+        f'<stop offset="0" stop-color="{CY}"/>'
+        f'<stop offset="0.45" stop-color="#22D3EE"/>'
+        f'<stop offset="1" stop-color="{MG}"/></linearGradient>')
 
 
 def typeset(text, size, tracking=0):
