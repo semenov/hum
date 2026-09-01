@@ -126,11 +126,12 @@ def lockup(ink=None):
     """ink=None emits a self-adapting file: the ink colour follows the viewer's
     colour scheme, so the logo is still right if used without <picture>."""
     if ink is None:
-        # Light ink by default, dark only when the viewer asks for a light
-        # scheme — the same way crosstalk does it.
-        style = ('<style>.ink{fill:%s}'
-                 '@media(prefers-color-scheme:light){.ink{fill:%s}}</style>'
-                 % (INK_D, INK_L))
+        # No media query. GitHub's iOS app hands SVGs a light colour scheme no
+        # matter how the page is drawn, so any light-scheme rule paints black
+        # letters onto its black background — measured twice off screenshots,
+        # #0B0C0D on #0D1016, once with the query each way round. A single ink
+        # that holds on both backgrounds is the only thing that survives.
+        style = "<style>.ink{fill:%s}</style>" % INK_AUTO
         word = "".join(f'<g class="ink" transform="translate({tx+dx:.1f},{base:.1f}) '
                        f'scale({sc},{-sc})">{glyphs}</g>' if c is None else
                        f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '
