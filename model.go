@@ -63,6 +63,17 @@ func modelDir(repo string) string {
 	return filepath.Join(humDir(), "models", strings.ReplaceAll(repo, "/", "__"))
 }
 
+// modelLabel turns a directory back into something worth reading. Managed
+// models live in a flattened directory name; anything else is shown as its
+// own basename.
+func modelLabel(path string) string {
+	base := filepath.Base(path)
+	if strings.Contains(base, "__") {
+		return strings.ReplaceAll(base, "__", "/")
+	}
+	return base
+}
+
 // haveModel reports whether a directory looks like a usable MLX model.
 func haveModel(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
@@ -147,7 +158,19 @@ func EnsureModel(spec ModelSpec) (string, error) {
 		return "", err
 	}
 
-	fmt.Printf("first run: fetching %s (%.1f GB)\n", spec.Name, float64(total)/1e9)
+	u := newUI()
+	u.Head("FIRST RUN", "the model needs to be downloaded once")
+	if os.Getenv("HUM_MODEL_REPO") != "" {
+		u.Para("Fetching %s because HUM_MODEL_REPO asks for it, rather than the "+
+			"model Hum would pick for this Mac.", spec.Repo)
+	} else {
+		u.Para("Hum chose %s for this Mac. It has %s of unified memory, and this "+
+			"is the largest model that comfortably fits alongside its cache.",
+			spec.Name, humanBytes(systemRAM()))
+	}
+	u.Para("The download is %s and happens only this once. It resumes where it "+
+		"left off if interrupted, so it is safe to stop and come back later.",
+		humanBytes(total))
 	p := NewProgress(total)
 	p.Add(already)
 	p.Start()
@@ -163,7 +186,7 @@ func EnsureModel(spec ModelSpec) (string, error) {
 		}
 	}
 	if !haveModel(dir) {
-		return "", fmt.Errorf("download finished but %s does not look like a model", dir)
+		return "", fmt.Errorf("the download finished but %s does not contain a usable model", short(dir))
 	}
 	return dir, nil
 }

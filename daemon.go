@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -92,7 +91,7 @@ func startDaemon(cfg Config, wait time.Duration) error {
 	_ = cmd.Process.Release()
 
 	u := newUI()
-	sp := u.Spin("loading " + filepath.Base(cfg.Model))
+	sp := u.Spin("Loading " + modelLabel(cfg.Model))
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -101,12 +100,14 @@ func startDaemon(cfg Config, wait time.Duration) error {
 		}
 		if _, err := probe(cfg.Addr, 2*time.Second); err == nil {
 			sp.Stop()
-			u.OK("hum is ready")
-			u.KV("address", "http://"+cfg.Addr)
-			u.KV("model", filepath.Base(cfg.Model))
-			u.KV("pid", strconv.Itoa(pid))
-			u.Hint("logs at", short(logPath()))
-			u.Blank()
+			u.OK("Hum is ready.")
+			u.Para("The server is listening on http://%s and speaks the OpenAI "+
+				"chat completions API. Point OpenCode, your editor, or any OpenAI "+
+				"SDK at it — no API key is required.", cfg.Addr)
+			u.KV("Model", modelLabel(cfg.Model))
+			u.KV("Process", strconv.Itoa(pid))
+			u.KV("Logs", short(logPath()))
+			u.Hint("Stop it again with", "hum stop")
 			return nil
 		}
 		time.Sleep(400 * time.Millisecond)
@@ -130,16 +131,17 @@ func stopDaemon(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
 			os.Remove(pidPath())
-			u.Off("hum stopped")
-			u.Blank()
+			u.Off("Hum has stopped.")
+			u.Para("The model has been unloaded and that memory is free again.")
 			return nil
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	os.Remove(pidPath())
-	u.Off("hum stopped (forced)")
-	u.Blank()
+	u.Off("Hum has stopped.")
+	u.Para("It did not shut down cleanly in time, so it was forced. The model " +
+		"has been unloaded either way.")
 	return nil
 }
 
@@ -147,30 +149,30 @@ func statusCmd(cfg Config) error {
 	u := newUI()
 	pid, alive := readPID()
 	if !alive {
-		u.Off("hum is not running")
+		u.Off("Hum is not running.")
+		u.Para("No model is loaded, so none of your memory is being used.")
 		if cfg.Model != "" {
-			u.KV("model", filepath.Base(cfg.Model))
-			u.KV("address", cfg.Addr)
+			u.KV("Model", modelLabel(cfg.Model))
+			u.KV("Address", cfg.Addr)
 		}
-		u.Hint("start it with", "hum start")
-		u.Blank()
+		u.Hint("Start it with", "hum start")
 		return nil
 	}
 	h, err := probe(cfg.Addr, 3*time.Second)
 	if err != nil {
-		u.Off("hum is starting — the model is still loading")
-		u.KV("pid", strconv.Itoa(pid))
-		u.Hint("follow along with", "hum logs -f")
-		u.Blank()
+		u.Off("Hum is still starting up.")
+		u.Para("The process is alive but the model has not finished loading yet, " +
+			"so it is not answering requests. This usually takes a few seconds.")
+		u.KV("Process", strconv.Itoa(pid))
+		u.Hint("Follow along with", "hum logs -f")
 		return nil
 	}
-	u.OK("hum is running")
-	u.KV("address", "http://"+h.Addr)
-	u.KV("model", filepath.Base(h.Model))
-	u.KV("uptime", dur(h.Uptime))
-	u.KV("pid", strconv.Itoa(h.PID))
-	u.Hint("logs at", short(logPath()))
-	u.Blank()
+	u.OK("Hum is running.")
+	u.Para("It has been up for %s and is serving on http://%s.", dur(h.Uptime), h.Addr)
+	u.KV("Model", modelLabel(h.Model))
+	u.KV("Process", strconv.Itoa(h.PID))
+	u.KV("Logs", short(logPath()))
+	u.Hint("Stop it with", "hum stop")
 	return nil
 }
 

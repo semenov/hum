@@ -10,51 +10,94 @@ import (
 
 // UI keeps command output looking like one program. Everything here degrades to
 // plain text when stdout is not a terminal or NO_COLOR is set; see palette.
-type UI struct{ p palette }
+type UI struct {
+	p palette
+	// blank tracks whether the last thing written ended with an empty line, so
+	// blocks can be separated without ever doubling up the gap.
+	blank bool
+}
 
-func newUI() UI { return UI{newPalette()} }
+func newUI() *UI { return &UI{p: newPalette()} }
+
+// gap writes a separating blank line unless one is already there.
+func (u *UI) gap() {
+	if !u.blank {
+		fmt.Println()
+		u.blank = true
+	}
+}
 
 // Running, stopped and failed states, so they are recognisable at a glance.
-func (u UI) OK(format string, a ...any) {
-	fmt.Printf("\n  %s %s\n", u.p.green("●"), u.p.bold(fmt.Sprintf(format, a...)))
+func (u *UI) OK(format string, a ...any) {
+	fmt.Printf("\n  %s %s\n\n", u.p.green("●"), u.p.bold(fmt.Sprintf(format, a...)))
+	u.blank = true
 }
 
-func (u UI) Off(format string, a ...any) {
-	fmt.Printf("\n  %s %s\n", u.p.dim("○"), fmt.Sprintf(format, a...))
+func (u *UI) Off(format string, a ...any) {
+	fmt.Printf("\n  %s %s\n\n", u.p.dim("○"), u.p.bold(fmt.Sprintf(format, a...)))
+	u.blank = true
 }
 
-func (u UI) Fail(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "\n  %s %s\n", u.p.rgb(255, 110, 110, "✗"),
-		fmt.Sprintf(format, a...))
+func (u *UI) Fail(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "\n  %s %s\n\n", u.p.rgb(255, 110, 110, "✗"),
+		u.p.bold(fmt.Sprintf(format, a...)))
+	u.blank = true
 }
 
 // Head labels a block of key/value lines.
-func (u UI) Head(title, note string) {
+func (u *UI) Head(title, note string) {
 	line := "\n  " + u.p.green(title)
 	if note != "" {
 		line += u.p.dim("  " + note)
 	}
-	fmt.Println(line)
+	fmt.Println(line + "\n")
+	u.blank = true
 }
 
-const keyWidth = 14
+const keyWidth = 12
+
+// Para prints an explanatory paragraph, wrapped and indented under a heading.
+// Output is meant to be read, not grepped, so it gets room to breathe.
+func (u *UI) Para(format string, a ...any) {
+	const width = 68
+	words := strings.Fields(fmt.Sprintf(format, a...))
+	line := ""
+	for _, w := range words {
+		if line != "" && len(line)+1+len(w) > width {
+			fmt.Println("    " + u.p.dim(line))
+			line = ""
+		}
+		if line != "" {
+			line += " "
+		}
+		line += w
+	}
+	if line != "" {
+		fmt.Println("    " + u.p.dim(line))
+	}
+	fmt.Println()
+	u.blank = true
+}
 
 // KV prints one aligned label/value pair. Values are blue: they are the part
 // worth copying.
-func (u UI) KV(key, value string) {
+func (u *UI) KV(key, value string) {
 	pad := keyWidth - len(key)
 	if pad < 1 {
 		pad = 1
 	}
 	fmt.Printf("    %s%s%s\n", u.p.dim(key), strings.Repeat(" ", pad), u.p.blue(value))
+	u.blank = false
 }
 
 // Hint is a suggested next command.
-func (u UI) Hint(text, cmd string) {
-	fmt.Printf("\n    %s %s\n", u.p.dim(text), u.p.blue(cmd))
+func (u *UI) Hint(text, cmd string) {
+	u.gap()
+	fmt.Printf("    %s %s\n\n", u.p.dim(text), u.p.blue(cmd))
+	u.blank = true
 }
 
-func (u UI) Blank() { fmt.Println() }
+func (u *UI) Blank() { u.gap() }
 
 // Spinner shows progress for work with no measurable percentage — loading a
 // model, mostly. Silent when not on a terminal.
@@ -67,7 +110,7 @@ type Spinner struct {
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-func (u UI) Spin(label string) *Spinner {
+func (u *UI) Spin(label string) *Spinner {
 	s := &Spinner{p: u.p, label: label, stop: make(chan struct{})}
 	if !u.p.on {
 		fmt.Printf("\n  %s\n", label)

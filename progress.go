@@ -96,7 +96,8 @@ func (p *Progress) Stop() {
 		fmt.Print("\r\033[K\n\r\033[K\033[1A\r")
 	}
 	d := time.Since(p.start).Round(time.Second)
-	fmt.Printf("downloaded %s in %s\n", humanBytes(p.done.Load()), d)
+	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n",
+		humanBytes(p.done.Load()), d)
 }
 
 func (p *Progress) render() {
@@ -123,7 +124,7 @@ func (p *Progress) render() {
 			return
 		}
 		p.lastLog = time.Now()
-		fmt.Printf("  %.0f%%  %s / %s  %s/s\n", frac*100,
+		fmt.Printf("  Downloading… %.0f%%  %s of %s  at %s/s\n", frac*100,
 			humanBytes(done), humanBytes(total), humanBytes(int64(speed)))
 		return
 	}
