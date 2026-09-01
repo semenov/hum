@@ -37,7 +37,10 @@ func defaultConfig() Config {
 		}
 		worker = filepath.Join(filepath.Dir(exe), "worker.py")
 	}
-	return Config{Addr: "127.0.0.1:8090", Python: python, Worker: worker, CacheEntries: 4}
+	// 4860: h-u-m is 4-8-6 on a phone keypad. Unassigned by IANA, and clear of
+	// the ports the neighbours already took — 1234 (LM Studio), 11434 (Ollama),
+	// 8080, 8000, 5000.
+	return Config{Addr: "127.0.0.1:4860", Python: python, Worker: worker, CacheEntries: 4}
 }
 
 func loadConfig() (Config, error) {

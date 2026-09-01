@@ -126,7 +126,7 @@ var agentFlags = []cmdDoc{
 
 var flagsDoc = []cmdDoc{
 	{"--model PATH", "use a specific model instead of the built-in choice"},
-	{"--addr HOST:PORT", "listen somewhere other than 127.0.0.1:8090"},
+	{"--addr HOST:PORT", "listen somewhere other than 127.0.0.1:4860"},
 	{"--python PATH", "python interpreter that runs the worker"},
 	{"--cache-entries N", "conversations kept warm in the prompt cache"},
 }
@@ -141,7 +141,7 @@ func helpText() string {
 	b.WriteString("  " + p.green("QUICK START") + "\n")
 	b.WriteString("    " + p.blue("hum start") + "\n")
 	b.WriteString("    " + p.dim("Downloads the right model for your Mac the first time, then serves") + "\n")
-	b.WriteString("    " + p.dim("on http://127.0.0.1:8090/v1 — point any OpenAI client at it.") + "\n\n")
+	b.WriteString("    " + p.dim("on http://127.0.0.1:4860/v1 — point any OpenAI client at it.") + "\n\n")
 	b.WriteString("    " + p.blue("hum chat") + "\n")
 	b.WriteString("    " + p.dim("Or just talk to it here, without setting up a client at all.") + "\n\n")
 
