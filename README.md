@@ -23,11 +23,11 @@ first run: fetching Qwen3.6 35B-A3B (20.4 GB)
 
 downloaded 20.4 GB in 4m01s
 starting hum (pid 4909), loading ~/.hum/models/…-35B-A3B-MLX-4bit
-ready on http://127.0.0.1:4860  (logs: ~/.hum/hum.log)
+ready on http://127.0.0.1:4242  (logs: ~/.hum/hum.log)
 ```
 
 No flags, no model to pick, no account. Point OpenCode, your editor, or any
-OpenAI SDK at `http://127.0.0.1:4860/v1` and it works.
+OpenAI SDK at `http://127.0.0.1:4242/v1` and it works.
 
 Or try it without a client at all:
 
@@ -176,9 +176,9 @@ Round-trip is verified end to end: call -> `tool_calls` +
 
 ## The port
 
-4860, because h-u-m is 4-8-6 on a phone keypad. It is unassigned by IANA and
-clear of the ports the neighbours already hold: 1234 (LM Studio), 11434
-(Ollama), 8080, 8000, 5000, 3000.
+4242. Unassigned by IANA, and easy to remember, which is the point — a port you
+have to look up every time is a worse port than one that occasionally collides.
+It stays clear of 1234 (LM Studio), 11434 (Ollama) and the usual 8080/8000/3000.
 
     hum start --addr 127.0.0.1:8080     # if you want a different one
 
