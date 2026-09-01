@@ -189,8 +189,8 @@ run a shell command.
 
 **What it is allowed to do is deliberately narrow by default.** Reading and
 searching are confined to the directory you start it in. Writing needs
-`--write`, and running commands needs `--shell`; interactively it asks before
-each one instead.
+`--allow-write`, and running commands needs `--allow-shell`; interactively it
+asks before each one instead.
 
 That split is not decoration. During testing the agent was told to write outside
 its directory: `write_file` refused, and the model then routed around it with

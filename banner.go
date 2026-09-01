@@ -118,9 +118,9 @@ var commands = []cmdDoc{
 }
 
 var agentFlags = []cmdDoc{
-	{"--write", "let it create and overwrite files in this directory"},
-	{"--shell", "let it run commands — these are NOT confined to it"},
-	{"--yes", "shorthand for both of the above"},
+	{"--allow-write", "let it create and overwrite files in this directory"},
+	{"--allow-shell", "let it run commands, sandboxed against writes outside"},
+	{"--allow-all", "shorthand for both of the above"},
 	{"--quiet", "print only the final answer, for scripts"},
 }
 

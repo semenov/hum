@@ -33,9 +33,10 @@ func agentCmd(cfg Config, allowWrite, allowShell bool) error {
 	}()
 
 	u.OK("Agent · %s", prettyModel(h.Model))
-	u.Para("It reads and searches inside %s, and asks before it writes anything. "+
-		"It can also run shell commands, which start there but are not confined "+
-		"to it — read those before allowing them.", short(root))
+	u.Para("It reads and searches inside %s, and asks before it writes anything "+
+		"or runs a command. Commands run under a sandbox that stops them writing "+
+		"outside this directory, though they can still read anywhere and reach "+
+		"the network.", short(root))
 	if allowWrite || allowShell {
 		u.Para("Some permissions were granted on the command line, so it will not " +
 			"ask for those. Watch what it does.")

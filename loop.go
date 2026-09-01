@@ -174,11 +174,11 @@ func runCmd(cfg Config, query string, allowWrite, allowShell, quiet bool) error 
 			granted = append(granted, "write files inside this directory")
 		}
 		if allowShell {
-			granted = append(granted, "run shell commands, which are NOT confined to it")
+			granted = append(granted, "run shell commands, sandboxed so they cannot write outside it")
 		}
 		if len(granted) == 0 {
 			u.Para("It can read and search only. There is nobody here to confirm a " +
-				"change, so --write and --shell have to be granted on the command line.")
+				"change, so --allow-write and --allow-shell have to be granted on the command line.")
 		} else {
 			u.Para("It may %s.", strings.Join(granted, ", and "))
 		}

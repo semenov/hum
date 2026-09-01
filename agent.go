@@ -224,10 +224,14 @@ func runTool(u *UI, o agentOpts, name, args string) string {
 
 	case "run_command":
 		cmd := str("command")
-		if !o.confirm(u, "shell", "Run a shell command (not confined to this directory)", cmd) {
+		label := "Run a shell command"
+		if !sandboxAvailable() {
+			label += " (writes are NOT confined — no sandbox on this system)"
+		}
+		if !o.confirm(u, "shell", label, cmd) {
 			return "error: the user declined to run this command"
 		}
-		c := exec.Command("sh", "-c", cmd)
+		c := sandboxedShell(cmd, o.root)
 		c.Dir = o.root
 		out, err := c.CombinedOutput()
 		res := string(out)
@@ -240,6 +244,35 @@ func runTool(u *UI, o agentOpts, name, args string) string {
 		return clip(res)
 	}
 	return "error: no such tool"
+}
+
+// Seatbelt confines writes to the working directory at the kernel level, so a
+// command cannot escape the way `printf > /tmp/x` did before this existed —
+// nor through a symlink, a rename, or a different language's file API.
+//
+// Reads and network are deliberately left alone: a confined read set breaks
+// almost every real command (interpreters, compilers and git all read far
+// outside the project), and the damage that matters is modification.
+func sandboxAvailable() bool {
+	_, err := os.Stat("/usr/bin/sandbox-exec")
+	return err == nil
+}
+
+func sandboxedShell(cmd, root string) *exec.Cmd {
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil || !sandboxAvailable() {
+		return exec.Command("sh", "-c", cmd)
+	}
+	// The path must be the resolved one: on macOS /tmp is a link to /private/tmp
+	// and a rule naming the link never matches.
+	policy := fmt.Sprintf(`(version 1)
+(allow default)
+(deny file-write* (subpath "/"))
+(allow file-write* (subpath %q))
+(allow file-write-data
+  (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr")
+  (literal "/dev/tty") (literal "/dev/dtracehelper"))`, real)
+	return exec.Command("/usr/bin/sandbox-exec", "-p", policy, "sh", "-c", cmd)
 }
 
 func preview(s string) string {

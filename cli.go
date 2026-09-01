@@ -79,15 +79,15 @@ func main() {
 
 	case "ask", "run", "agent":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		write := fs.Bool("write", false, "let it create and overwrite files in this directory")
-		shell := fs.Bool("shell", false, "let it run shell commands (not confined to this directory)")
-		yes := fs.Bool("yes", false, "shorthand for --write --shell")
+		write := fs.Bool("allow-write", false, "let it create and overwrite files in this directory")
+		shell := fs.Bool("allow-shell", false, "let it run shell commands, sandboxed against writes outside")
+		all := fs.Bool("allow-all", false, "shorthand for --allow-write --allow-shell")
 		quiet := fs.Bool("quiet", false, "print only the final answer")
 		if err := fs.Parse(args); err != nil {
 			fail(err)
 		}
 		query := strings.Join(fs.Args(), " ")
-		aw, as := *write || *yes, *shell || *yes
+		aw, as := *write || *all, *shell || *all
 		var err error
 		switch cmd {
 		case "ask":
