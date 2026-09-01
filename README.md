@@ -517,42 +517,17 @@ chats does not throw the cache away.
 
 ## Tool calling
 
-`tools` are passed to the model's chat template, and the reply is parsed back
-into OpenAI `tool_calls`. This model's native syntax is XML, not JSON:
+Send `tools` as you would upstream and get `tool_calls` back, with
+`finish_reason: "tool_calls"`; feed the result in as `role: "tool"` and the
+model answers. There are worked examples in both SDKs
+[above](#plug-it-into-your-tools).
 
-```
-<tool_call>
-<function=get_weather>
-<parameter=city>
-Moscow
-</parameter>
-</function>
-</tool_call>
-```
-
-Parameters are typed from the JSON schema you sent, so `{"days": 3}` comes back
-as a number, not `"3"`.
-
-Parsing alone is best-effort, so generation is also **constrained**: an
-`llguidance` grammar is armed the moment the model emits `<tool_call>` and
-released when the call is complete. An invalid call cannot be produced — the
-model cannot name a function you did not offer, and cannot break the format.
-
-```
-[OK] valid call                     accepted=True
-[OK] second offered tool            accepted=True
-[OK] INVENTED function name         accepted=False   <- rejected mid-token
-[OK] prefix of an offered name      accepted=False
-[OK] JSON instead of XML            accepted=False
-[OK] missing </function>            accepted=False
-```
-
-Cost: **5.8%**, and only when `tools` are present (91.4 -> 86.1 tok/s). Plain
-chat is unaffected. Note 86.1 with the grammar armed is still above LM Studio's
-82.7 without it.
-
-Round-trip is verified end to end: call -> `tool_calls` +
-`finish_reason: "tool_calls"`, result fed back as `role: "tool"`, model answers.
+Two things are better than plain parsing. Parameters are typed from the JSON
+schema you sent, so `{"days": 3}` comes back as a number rather than `"3"`. And
+generation is constrained by a grammar armed the moment the model starts a
+call, so an invalid one cannot be produced at all — it cannot name a function
+you did not offer, and it cannot break the format. That costs **5.8%** while
+`tools` are present, and nothing otherwise.
 
 ## Context
 
