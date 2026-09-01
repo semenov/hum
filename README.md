@@ -584,6 +584,50 @@ suggests a limit well below the ceiling. And the cache holds four conversations
 by default (`--cache-entries`), each with its own KV, so four long sessions
 cost four times the memory. It is bounded by count, not by bytes.
 
+## Structured output
+
+`response_format` works the way it does upstream, and for the same reason it
+does in tool calls: the schema is compiled to a grammar and the logits are
+masked, so output that does not match the schema is not merely rejected, it is
+never generated.
+
+```python
+schema = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "country": {"type": "string"},
+        "population": {"type": "integer"},
+    },
+    "required": ["city", "country", "population"],
+    "additionalProperties": False,
+}
+
+r = hum.chat.completions.create(
+    model="hum",
+    messages=[{"role": "user", "content": "Tell me about Lisbon."}],
+    response_format={"type": "json_schema",
+                     "json_schema": {"name": "city", "schema": schema}},
+)
+json.loads(r.choices[0].message.content)
+# {'city': 'Lisbon', 'country': 'Portugal', 'population': 550000}
+```
+
+`{"type": "json_object"}` also works and asks only for an object. Both are
+free: measured at 90.2 tok/s unconstrained against 90.4 with a schema, which is
+to say the masking disappears into the noise of an 11 ms decode step.
+
+**Reasoning still happens.** The grammar is armed only once the think block
+closes, so the model reasons in prose and is then held to the shape — you get
+both, rather than choosing. `message.reasoning` carries the thinking and
+`message.content` is the JSON.
+
+Enums, nested objects, arrays with `minItems` and integer types are all
+enforced, since llguidance compiles the schema rather than approximating it. If
+you send `tools` and `response_format` together, the schema wins: asking for
+both is contradictory, and a caller who wants a shape back wants it more than a
+function call.
+
 ## Limitations
 
 - **One request at a time.** No continuous batching; see the benchmark note.
@@ -596,8 +640,8 @@ cost four times the memory. It is bounded by count, not by bytes.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.
-- Not implemented: `tool_choice`, JSON-schema structured output, `logprobs`,
-  `n`, `seed`, `frequency_penalty` / `presence_penalty`, LoRA.
+- Not implemented: `tool_choice`, `logprobs`, `n`, `seed`,
+  `frequency_penalty` / `presence_penalty`, LoRA.
 - No auth and no request limits — do not expose this to a network.
 - Prompt-cache reuse is not bit-deterministic: resuming from a snapshot changes
   prefill chunk boundaries, which changes rounding, which can flip a token.

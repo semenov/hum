@@ -110,3 +110,39 @@ func TestPlainTextUntouched(t *testing.T) {
 		t.Errorf("content = %q", c)
 	}
 }
+
+func TestResponseFormatGrammar(t *testing.T) {
+	strict := true
+	cases := []struct {
+		name string
+		rf   *ResponseFormat
+		want string // JSON of what the worker should be told, "null" for nothing
+	}{
+		{"absent", nil, "null"},
+		{"text is not a constraint", &ResponseFormat{Type: "text"}, "null"},
+		{"json_object means an object", &ResponseFormat{Type: "json_object"},
+			`{"type":"object"}`},
+		{"json_schema passes the schema through", &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &struct {
+				Name   string          `json:"name"`
+				Schema json.RawMessage `json:"schema"`
+				Strict *bool           `json:"strict"`
+			}{Name: "city", Schema: json.RawMessage(`{"type":"object","required":["a"]}`), Strict: &strict},
+		}, `{"type":"object","required":["a"]}`},
+		// A schema-less json_schema request is malformed, but answering it with
+		// "any JSON" beats generating unconstrained text the caller will parse.
+		{"json_schema without a schema", &ResponseFormat{Type: "json_schema"}, "true"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := json.Marshal(c.rf.grammar())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("grammar() = %s, want %s", got, c.want)
+			}
+		})
+	}
+}

@@ -44,10 +44,45 @@ type ChatReq struct {
 	// required, nested types). A typed view is decoded separately for parsing.
 	Tools []json.RawMessage `json:"tools"`
 
+	ResponseFormat *ResponseFormat `json:"response_format"`
+
 	// Reasoning control, in all three shapes the ecosystem uses.
 	Reasoning       *ReasoningReq `json:"reasoning"`
 	ReasoningEffort string        `json:"reasoning_effort"`
 	IncludeReason   *bool         `json:"include_reasoning"`
+}
+
+// ResponseFormat is OpenAI's structured-output request. "text" is the default
+// and means nothing is constrained; "json_object" asks only for valid JSON;
+// "json_schema" carries a schema the answer has to satisfy.
+type ResponseFormat struct {
+	Type       string `json:"type"`
+	JSONSchema *struct {
+		Name   string          `json:"name"`
+		Schema json.RawMessage `json:"schema"`
+		Strict *bool           `json:"strict"`
+	} `json:"json_schema"`
+}
+
+// grammar returns what the worker should constrain generation to: a JSON
+// schema, `true` for any JSON, or nil to leave generation alone.
+func (r *ResponseFormat) grammar() any {
+	if r == nil {
+		return nil
+	}
+	switch r.Type {
+	case "json_object":
+		// Any JSON value is technically valid JSON, and a model asked for one
+		// with no other guidance will happily answer `1.5`. Everyone who sets
+		// this means an object.
+		return map[string]any{"type": "object"}
+	case "json_schema":
+		if r.JSONSchema != nil && len(r.JSONSchema.Schema) > 0 {
+			return r.JSONSchema.Schema
+		}
+		return true
+	}
+	return nil
 }
 
 // ReasoningReq is OpenRouter's object. effort and max_tokens both bound how
@@ -283,6 +318,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 		"messages": req.Messages, "max_tokens": req.MaxTokens,
 		"temp": temp, "top_p": topP, "tools": req.Tools,
 		"enable_thinking": plan.think, "think_budget": plan.budget,
+		"json_schema": req.ResponseFormat.grammar(),
 	})
 	if _, err := s.w.in.Write(append(wreq, '\n')); err != nil {
 		http.Error(rw, err.Error(), 500)

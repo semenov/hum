@@ -128,21 +128,40 @@ WS: /[ \t\n\r]*/
 """
 
 
-class ToolGuard:
+class _Watcher:
+    """Base for logits processors that react to what the model has generated.
+
+    generate_step hands a processor every token including the prompt, so the
+    first call has to be treated as a starting line rather than as history:
+    a prompt carrying an earlier `</think>` or `<tool_call>` from a previous
+    turn would otherwise arm the grammar before generation has begun.
+    """
+
+    def __init__(self):
+        self.seen = -1
+
+    def _generated(self, tokens):
+        if self.seen < 0:
+            self.seen = tokens.size
+            return []
+        new = tokens[self.seen:].tolist()
+        self.seen = tokens.size
+        return new
+
+
+class ToolGuard(_Watcher):
     """Logits processor: unconstrained until <tool_call>, grammar-locked after."""
 
     def __init__(self, tool_names):
+        super().__init__()
         self.grammar = _grammar(tool_names)
         self.llt = _llg_tokenizer()
         self.matcher = None
-        self.seen = 0
         self.bitmask = None
         self.constrained = 0
 
     def __call__(self, tokens, logits):
-        new = tokens[self.seen:].tolist()
-        self.seen = tokens.size
-        for t in new:
+        for t in self._generated(tokens):
             if self.matcher is None:
                 if t == TOOL_OPEN:
                     self.matcher = llguidance.LLMatcher(self.llt, self.grammar)
@@ -160,7 +179,54 @@ class ToolGuard:
         return llguidance.mlx.apply_token_bitmask(logits, self.bitmask)
 
 
-class ThinkBudget:
+class JSONGuard(_Watcher):
+    """Logits processor that forces the answer to be JSON, optionally to schema.
+
+    Armed only once the think block closes, so `response_format` and reasoning
+    compose instead of excluding each other: the model reasons in prose and is
+    then held to the shape. Once the value is complete the only legal token is
+    the end of the message, otherwise the model cheerfully starts a second one.
+    """
+
+    def __init__(self, schema, wait_for_think):
+        super().__init__()
+        self.grammar = llguidance.LLMatcher.grammar_from_json_schema(
+            True if schema is None else schema)
+        self.llt = _llg_tokenizer()
+        self.armed = not wait_for_think
+        self.matcher = llguidance.LLMatcher(self.llt, self.grammar) if self.armed else None
+        self.bitmask = None
+
+    def _arm(self):
+        self.armed = True
+        self.matcher = llguidance.LLMatcher(self.llt, self.grammar)
+
+    def __call__(self, tokens, logits):
+        for t in self._generated(tokens):
+            if not self.armed:
+                if t == THINK_CLOSE:
+                    self._arm()
+                continue
+            if not self.matcher.is_stopped():
+                self.matcher.consume_token(int(t))
+        if not self.armed:
+            return logits
+        if self.matcher.get_error() or self.matcher.is_stopped():
+            return _only(logits, next(iter(sorted(eos))))
+        if self.bitmask is None:
+            self.bitmask = llguidance.numpy.allocate_token_bitmask(1, self.llt.vocab_size)
+        llguidance.numpy.fill_next_token_bitmask(self.matcher, self.bitmask, 0)
+        return llguidance.mlx.apply_token_bitmask(logits, self.bitmask)
+
+
+def _only(logits, token):
+    """Mask everything but one token."""
+    forced = mx.full(logits.shape, -mx.inf, dtype=logits.dtype)
+    idx = mx.array([[token]])
+    return mx.put_along_axis(forced, idx, logits[:, token:token + 1], axis=-1)
+
+
+class ThinkBudget(_Watcher):
     """Force the think block shut once it has run long enough.
 
     There is no effort dial on the model, so a budget is the only honest way to
@@ -169,8 +235,8 @@ class ThinkBudget:
     """
 
     def __init__(self, budget, start_inside=False):
+        super().__init__()
         self.budget = budget
-        self.seen = 0
         # The template puts <think> in the prompt rather than having the model
         # emit it, so the block is usually already open when generation starts.
         self.inside = start_inside
@@ -178,9 +244,7 @@ class ThinkBudget:
         self.closed = False
 
     def __call__(self, tokens, logits):
-        new = tokens[self.seen:].tolist()
-        self.seen = tokens.size
-        for t in new:
+        for t in self._generated(tokens):
             if t == THINK_OPEN:
                 self.inside, self.spent = True, 0
             elif t == THINK_CLOSE:
@@ -189,10 +253,7 @@ class ThinkBudget:
                 self.spent += 1
         if not self.inside or self.spent < self.budget:
             return logits
-        # Allow only the closing token.
-        forced = mx.full(logits.shape, -mx.inf, dtype=logits.dtype)
-        idx = mx.array([[THINK_CLOSE]])
-        return mx.put_along_axis(forced, idx, logits[:, THINK_CLOSE:THINK_CLOSE + 1], axis=-1)
+        return _only(logits, THINK_CLOSE)   # allow only the closing token
 
 
 def tool_names_of(tools):
@@ -472,7 +533,13 @@ for line in sys.stdin:
     names = tool_names_of(tools)
     guard_on = os.environ.get("HUM_NO_GUARD") != "1"
     procs = []
-    if guard_on and names and TOOL_OPEN and TOOL_CLOSE:
+    # response_format wins over tools: asking for both is contradictory, and a
+    # caller who wants a shape back wants it more than a function call.
+    schema = req.get("json_schema")
+    if schema is not None:
+        procs.append(JSONGuard(None if schema is True else schema,
+                               think and reasoning_is_open(prompt)))
+    elif guard_on and names and TOOL_OPEN and TOOL_CLOSE:
         procs.append(ToolGuard(names))
     budget = int(req.get("think_budget") or 0)
     if think and budget > 0 and THINK_OPEN and THINK_CLOSE:
