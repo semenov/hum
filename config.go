@@ -74,10 +74,13 @@ func loadConfig() (Config, error) {
 	if saved.Addr != "" {
 		cfg.Addr = saved.Addr
 	}
-	if saved.Python != "" {
+	// A remembered interpreter or worker is only used if it is still there.
+	// Homebrew installs into a versioned directory, so every upgrade moves
+	// these — a saved absolute path would break the next start otherwise.
+	if saved.Python != "" && exists(saved.Python) {
 		cfg.Python = saved.Python
 	}
-	if saved.Worker != "" {
+	if saved.Worker != "" && exists(saved.Worker) {
 		cfg.Worker = saved.Worker
 	}
 	if saved.CacheEntries > 0 {
@@ -85,6 +88,11 @@ func loadConfig() (Config, error) {
 	}
 	cfg.CORS = saved.CORS
 	return cfg, nil
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func saveConfig(cfg Config) error {
