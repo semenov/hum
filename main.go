@@ -154,7 +154,6 @@ func (r ChatReq) reasoning() reasoningPlan {
 // ---- worker ---------------------------------------------------------------
 
 type Worker struct {
-	mu    sync.Mutex // one generation at a time
 	cmd   *exec.Cmd
 	in    io.WriteCloser
 	out   *bufio.Reader
@@ -163,6 +162,89 @@ type Worker struct {
 	// weights it actually loaded. Published so clients can plan, enforced so
 	// they do not have to.
 	maxContext int
+
+	// Requests run concurrently, so events arrive interleaved and tagged with
+	// the request they belong to. One goroutine reads them and posts each to
+	// the handler waiting for it.
+	mu     sync.Mutex
+	nextID uint32
+	routes map[uint32]chan event
+	dead   error
+
+	writeMu sync.Mutex // one whole request line at a time
+}
+
+// submit registers a request and hands it to the worker, returning the channel
+// its events will arrive on. Callers must release the id when they are done,
+// finished or not, or the routing table grows forever.
+func (w *Worker) submit(payload map[string]any) (uint32, chan event, error) {
+	w.mu.Lock()
+	if w.dead != nil {
+		err := w.dead
+		w.mu.Unlock()
+		return 0, nil, err
+	}
+	id := w.nextID
+	w.nextID++
+	// Buffered generously: the pump must not stall behind one slow HTTP client
+	// while other requests are still generating.
+	ch := make(chan event, 1024)
+	w.routes[id] = ch
+	w.mu.Unlock()
+
+	payload["id"] = id
+	b, err := json.Marshal(payload)
+	if err != nil {
+		w.release(id)
+		return 0, nil, err
+	}
+	w.writeMu.Lock()
+	_, err = w.in.Write(append(b, '\n'))
+	w.writeMu.Unlock()
+	if err != nil {
+		w.release(id)
+		return 0, nil, err
+	}
+	return id, ch, nil
+}
+
+func (w *Worker) release(id uint32) {
+	w.mu.Lock()
+	delete(w.routes, id)
+	w.mu.Unlock()
+}
+
+// pump reads the worker's event stream and routes each event to its request.
+// It is the only reader of w.out.
+func (w *Worker) pump() {
+	for {
+		k, err := w.out.ReadByte()
+		if err == nil {
+			var b [8]byte
+			_, err = io.ReadFull(w.out, b[:])
+			if err == nil {
+				id := binary.LittleEndian.Uint32(b[:4])
+				ev := event{k, binary.LittleEndian.Uint32(b[4:])}
+				w.mu.Lock()
+				ch := w.routes[id]
+				w.mu.Unlock()
+				if ch != nil {
+					ch <- ev
+				}
+				continue
+			}
+		}
+		// The worker died or the pipe closed. Everyone waiting has to be told,
+		// or they wait forever.
+		w.mu.Lock()
+		w.dead = fmt.Errorf("worker stopped: %w", err)
+		for _, ch := range w.routes {
+			close(ch)
+		}
+		w.routes = map[uint32]chan event{}
+		w.mu.Unlock()
+		return
+	}
 }
 
 func NewWorker(python, script, model string, entries int) (*Worker, error) {
@@ -205,7 +287,10 @@ func NewWorker(python, script, model string, entries int) (*Worker, error) {
 	}
 	log.Printf("worker ready, vocab %d entries, context ceiling %d tokens",
 		len(vocab), maxContext)
-	return &Worker{cmd: cmd, in: stdin, out: br, vocab: vocab, maxContext: maxContext}, nil
+	w := &Worker{cmd: cmd, in: stdin, out: br, vocab: vocab,
+		maxContext: maxContext, routes: map[uint32]chan event{}}
+	go w.pump()
+	return w, nil
 }
 
 func loadVocab(path string) ([][]byte, error) {
@@ -230,16 +315,14 @@ type event struct {
 	val  uint32
 }
 
-func (w *Worker) next() (event, error) {
-	k, err := w.out.ReadByte()
-	if err != nil {
-		return event{}, err
+// recv waits for the next event of a request. A closed channel means the
+// worker died.
+func recv(ch chan event) (event, error) {
+	ev, ok := <-ch
+	if !ok {
+		return event{}, fmt.Errorf("the worker stopped before finishing this request")
 	}
-	var b [4]byte
-	if _, err := io.ReadFull(w.out, b[:]); err != nil {
-		return event{}, err
-	}
-	return event{k, binary.LittleEndian.Uint32(b[:])}, nil
+	return ev, nil
 }
 
 // ---- streaming detokenizer (byte-level BPE) --------------------------------
@@ -310,25 +393,23 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 		topP = *req.TopP
 	}
 
-	s.w.mu.Lock()
-	defer s.w.mu.Unlock()
-
 	plan := req.reasoning()
-	wreq, _ := json.Marshal(map[string]any{
+	reqID, ch, err := s.w.submit(map[string]any{
 		"messages": req.Messages, "max_tokens": req.MaxTokens,
 		"temp": temp, "top_p": topP, "tools": req.Tools,
 		"enable_thinking": plan.think, "think_budget": plan.budget,
 		"json_schema": req.ResponseFormat.grammar(),
 	})
-	if _, err := s.w.in.Write(append(wreq, '\n')); err != nil {
+	if err != nil {
 		http.Error(rw, err.Error(), 500)
 		return
 	}
+	defer s.w.release(reqID)
 
 	// The worker answers with the prompt length before it does anything with
 	// it, so an oversized prompt costs a tokenisation rather than a swap storm.
 	// 'C' (cache reuse) otherwise, which nothing downstream reads.
-	first, err := s.w.next()
+	first, err := recv(ch)
 	if err != nil {
 		http.Error(rw, err.Error(), 500)
 		return
@@ -368,7 +449,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 		var calls []ToolCall
 		truncated := false
 		for {
-			ev, err := s.w.next()
+			ev, err := recv(ch)
 			if err != nil {
 				http.Error(rw, err.Error(), 500)
 				return
@@ -511,7 +592,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	for !stopped {
-		ev, err := s.w.next()
+		ev, err := recv(ch)
 		if err != nil {
 			return
 		}

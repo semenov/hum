@@ -460,9 +460,21 @@ The last row is worth a look: LM Studio takes 462 ms whether or not you switch
 conversations, while `hum` drops to 148 ms because several conversation
 prefixes stay resident.
 
-**Where it loses:** concurrency. There is no continuous batching, so several
-simultaneous requests are served one at a time (~90 tok/s aggregate, against
-LM Studio's ~165). `hum` optimises single-stream latency.
+**Concurrency.** Requests are batched, so several callers share a decode step
+rather than queueing behind each other. A step reads the whole model whatever
+the batch size, which is why the aggregate goes up while each individual stream
+slows down:
+
+| clients | aggregate | per client |
+|---|---|---|
+| 1 | 85.5 tok/s | 85.5 |
+| 2 | 95.7 tok/s | 47.9 |
+| 4 | 173.9 tok/s | 43.5 |
+| 8 | 213.6 tok/s | 26.7 |
+
+Single-stream speed is unaffected — 89.7 tok/s measured after the change,
+against 89-92 before it. Streaming and blocking callers mix freely, and the
+context ceiling is shared between them rather than assumed by each.
 
 ## How it works
 
@@ -630,13 +642,14 @@ function call.
 
 ## Limitations
 
-- **One request at a time.** No continuous batching; see the benchmark note.
 - Context is bounded by memory rather than by a setting. Nothing stops you
   sending a prompt too large for the machine, and hum neither advertises a
   context length in `/v1/models` nor returns `context_length_exceeded` — so a
   client has no way to find the limit and no error when it crosses it. What you
   get instead is swapping. This is why the OpenCode config above sets `limit`
   by hand. See [Context](#context).
+- A client that disconnects mid-request does not stop the work: the worker
+  finishes generating and the tokens are dropped. Wasted compute, not a leak.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.

@@ -11,14 +11,15 @@ Protocol (binary, over stdout):
             b'T' + u32 token_id          (repeated)
             b'E' + u32 n_generated       (done)
 """
-import json, os, struct, sys
+import json, os, queue, struct, sys, threading
+from collections import deque
 import mlx.core as mx
 import llguidance
 import llguidance.hf
 import llguidance.mlx
 import llguidance.numpy
 from mlx_lm.utils import load
-from mlx_lm.generate import generate_step
+from mlx_lm.generate import BatchGenerator
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.sample_utils import make_sampler
 
@@ -488,81 +489,212 @@ print(f"context ceiling {MAX_CONTEXT} tokens", file=sys.stderr, flush=True)
 out.write(b"R" + struct.pack("<I", MAX_CONTEXT)); out.flush()
 
 # ---- serve -----------------------------------------------------------------
-for line in sys.stdin:
-    line = line.strip()
-    if not line: continue
-    req = json.loads(line)
+# Requests are handled concurrently through mlx-lm's continuous batching. The
+# win is not parallelism in the usual sense: a decode step reads the whole model
+# whatever the batch size, so four sequences advancing together cost barely more
+# than one advancing alone. Serialising them, as this worker used to, threw that
+# away and made a second caller wait for the first to finish.
+MAX_BATCH = int(os.environ.get("HUM_MAX_BATCH", "8"))
+
+incoming = queue.Queue()
+
+
+def _read_stdin():
+    for line in sys.stdin:
+        line = line.strip()
+        if line:
+            incoming.put(json.loads(line))
+    incoming.put(None)
+
+
+def emit(kind, rid, val):
+    """Every event carries the request it belongs to; Go demultiplexes."""
+    out.write(kind + struct.pack("<II", rid, val))
+
+
+def chunked(seq, n):
+    return [seq[i:i + n] for i in range(0, len(seq), n)]
+
+
+class Live:
+    """One in-flight request, from admission to its last token."""
+
+    __slots__ = ("rid", "prompt", "cut", "snap_after", "segments_done",
+                 "n_gen", "snapped", "budget")
+
+    def __init__(self, rid, prompt, cut, snap_after, budget):
+        self.rid = rid
+        self.prompt = prompt
+        self.cut = cut
+        self.snap_after = snap_after   # segments to finish before snapshotting
+        self.segments_done = 0
+        self.n_gen = 0
+        self.snapped = snap_after < 0
+        self.budget = budget
+
+
+class Admitted:
+    """A request rendered and costed, waiting for room in the batch."""
+
+    __slots__ = ("rid", "prompt", "cut", "segments", "snap_after", "cache",
+                 "max_tokens", "sampler", "procs", "budget", "thinking",
+                 "n_reused")
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def render_request(req):
+    """Turn a request into something admittable, or refuse it outright.
+
+    Returns None when the prompt cannot ever fit, having already told the
+    client so — that is a property of the prompt, not of how busy we are.
+    """
+    rid = req["id"]
     tools = req.get("tools")
     think = req.get("enable_thinking", True)
     msgs = normalise(req["messages"])
     prompt = render(msgs, True, tools, think)
-    n_stable = stable_len(msgs, prompt, tools, think)
 
     if len(prompt) > MAX_CONTEXT:
-        out.write(b"X" + struct.pack("<I", len(prompt))); out.flush()
+        emit(b"X", rid, len(prompt))
+        out.flush()
         print(f"refused {len(prompt)} tokens, ceiling {MAX_CONTEXT}",
               file=sys.stderr, flush=True)
-        continue
+        return None
 
-    cache, todo, n_reused = prepare(prompt)
-    out.write(b"C" + struct.pack("<I", n_reused))
-    out.write(b"K" + struct.pack("<I", 1 if reasoning_is_open(prompt) else 0))
-    print(f"prompt {len(prompt)} | stable {n_stable} | reused {n_reused} "
-          f"| prefill {len(prompt) - n_reused} | entries {len(history.entries)}",
-          file=sys.stderr, flush=True)
+    n_stable = stable_len(msgs, prompt, tools, think)
+    cache, _, n_reused = prepare(prompt)
 
-    # Prefill up to the stable boundary and snapshot there, then prefill the
-    # rest (the generation-prompt suffix, which next turn will not match).
     cut = max(n_stable, n_reused)
     if cut <= n_reused or cut >= len(prompt):
-        cut = len(prompt) - 1        # nothing stable to snapshot; keep >=1 token
+        cut = len(prompt) - 1
     chunk = prefill_chunk(len(prompt))
-    def prefill(seq):
-        for i in range(0, len(seq), chunk):
-            model(mx.array(seq[i:i + chunk])[None], cache=cache)
-            mx.eval([c.state for c in cache])
-            mx.clear_cache()   # mlx-lm does this between prefill chunks;
-                               # without it allocation pressure builds up
-    prefill(prompt[n_reused:cut])
-    if cut == n_stable:
-        history.insert(prompt[:cut], take_snapshot(cache))
-    prefill(prompt[cut:-1])
-    todo = prompt[-1:]
+    head_segs = chunked(prompt[n_reused:cut], chunk)
+    tail_segs = chunked(prompt[cut:], chunk)
+    segments = head_segs + tail_segs
+    if not segments:
+        segments = [prompt[-1:]]
+    # Snapshot once the stable prefix is in the cache and before the generation
+    # prompt goes in: that boundary is what the next turn can still match.
+    snap_after = len(head_segs) if (cut == n_stable and head_segs) else -1
 
-    sampler = make_sampler(temp=req.get("temp", 0.7), top_p=req.get("top_p", 1.0))
-    names = tool_names_of(tools)
-    guard_on = os.environ.get("HUM_NO_GUARD") != "1"
     procs = []
-    # response_format wins over tools: asking for both is contradictory, and a
-    # caller who wants a shape back wants it more than a function call.
     schema = req.get("json_schema")
     if schema is not None:
         procs.append(JSONGuard(None if schema is True else schema,
                                think and reasoning_is_open(prompt)))
-    elif guard_on and names and TOOL_OPEN and TOOL_CLOSE:
-        procs.append(ToolGuard(names))
-    budget = int(req.get("think_budget") or 0)
-    if think and budget > 0 and THINK_OPEN and THINK_CLOSE:
-        procs.append(ThinkBudget(budget, reasoning_is_open(prompt)))
-    procs = procs or None
-    n = 0
-    first = True
-    hit_eos = False
-    w = out.write
-    for tid, _ in generate_step(mx.array(todo), model,
-                                max_tokens=req.get("max_tokens", 256),
-                                sampler=sampler, prompt_cache=cache,
-                                logits_processors=procs):
-        if first:
-            w(b"P" + struct.pack("<I", len(prompt))); out.flush(); first = False
-        if tid in eos:
-            hit_eos = True
+    elif os.environ.get("HUM_NO_GUARD") != "1":
+        names = tool_names_of(tools)
+        if names and TOOL_OPEN and TOOL_CLOSE:
+            procs.append(ToolGuard(names))
+    budget_think = int(req.get("think_budget") or 0)
+    if think and budget_think > 0 and THINK_OPEN and THINK_CLOSE:
+        procs.append(ThinkBudget(budget_think, reasoning_is_open(prompt)))
+
+    max_tokens = int(req.get("max_tokens", 256))
+    print(f"prompt {len(prompt)} | stable {n_stable} | reused {n_reused} "
+          f"| prefill {len(prompt) - n_reused} | chunk {chunk} "
+          f"| entries {len(history.entries)}", file=sys.stderr, flush=True)
+    return Admitted(
+        rid=rid, prompt=prompt, cut=cut, segments=segments, n_reused=n_reused,
+        snap_after=snap_after, cache=cache, max_tokens=max_tokens,
+        sampler=make_sampler(temp=req.get("temp", 0.7),
+                             top_p=req.get("top_p", 1.0)),
+        procs=procs or None,
+        # What this request will hold at its widest: everything it has to keep
+        # resident is prompt plus whatever it generates.
+        budget=len(prompt) + max_tokens,
+        thinking=reasoning_is_open(prompt),
+    )
+
+
+threading.Thread(target=_read_stdin, daemon=True).start()
+
+gen = BatchGenerator(
+    model,
+    stop_tokens=[[t] for t in sorted(eos)],
+    completion_batch_size=MAX_BATCH,
+    prefill_batch_size=MAX_BATCH,
+    prefill_step_size=PREFILL_CHUNK_MAX,
+)
+
+live = {}                 # uid -> Live
+pending = deque()         # rendered, waiting for room
+live_tokens = 0
+closed = False
+
+while True:
+    # Drain stdin. Block only when there is genuinely nothing else to do,
+    # otherwise a queued request would wait a whole decode step to be seen.
+    while True:
+        try:
+            req = incoming.get(block=not (live or pending))
+        except queue.Empty:
             break
-        w(b"T" + struct.pack("<I", tid)); out.flush()
-        n += 1
-    # Without this the client cannot tell a finished answer from one chopped
-    # off at max_tokens, which is what finish_reason exists to say.
-    w(b"F" + struct.pack("<I", 0 if hit_eos else 1))
-    if first:
-        w(b"P" + struct.pack("<I", len(prompt)))
-    w(b"E" + struct.pack("<I", n)); out.flush()
+        if req is None:
+            closed = True
+            break
+        a = render_request(req)
+        if a is not None:
+            pending.append(a)
+        if incoming.empty():
+            break
+
+    if closed and not live and not pending:
+        break
+
+    # Admit what fits. The context ceiling is a budget for the machine, not for
+    # one request, so concurrent callers share it rather than each assuming it.
+    while pending and len(live) < MAX_BATCH:
+        a = pending[0]
+        if live and live_tokens + a.budget > MAX_CONTEXT:
+            break
+        pending.popleft()
+        uid = gen.insert_segments(
+            [a.segments], max_tokens=[a.max_tokens], caches=[a.cache],
+            samplers=[a.sampler],
+            logits_processors=[a.procs] if a.procs else None,
+        )[0]
+        live[uid] = Live(a.rid, a.prompt, a.cut, a.snap_after, a.budget)
+        live_tokens += a.budget
+        emit(b"C", a.rid, a.n_reused)
+        emit(b"K", a.rid, 1 if a.thinking else 0)
+        out.flush()
+
+    if not live:
+        continue
+
+    prompt_responses, generation_responses = gen.next()
+
+    for r in prompt_responses:
+        st = live.get(r.uid)
+        if st is None:
+            continue
+        if r.end_of_segment:
+            st.segments_done += 1
+            if not st.snapped and st.segments_done == st.snap_after:
+                st.snapped = True
+                extracted = gen.extract_cache([r.uid]).get(r.uid)
+                if extracted is not None:
+                    history.insert(st.prompt[:st.cut],
+                                   [c.state for c in extracted[0]])
+        if r.end_of_prompt:
+            emit(b"P", st.rid, len(st.prompt))
+            out.flush()
+
+    for r in generation_responses:
+        st = live.get(r.uid)
+        if st is None:
+            continue
+        # The stop token is a signal, not output; Go would detokenise it.
+        if r.finish_reason != "stop":
+            emit(b"T", st.rid, r.token)
+            st.n_gen += 1
+        if r.finish_reason is not None:
+            emit(b"F", st.rid, 1 if r.finish_reason == "length" else 0)
+            emit(b"E", st.rid, st.n_gen)
+            live_tokens -= st.budget
+            del live[r.uid]
+        out.flush()
