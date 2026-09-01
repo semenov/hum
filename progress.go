@@ -96,7 +96,9 @@ func (p *Progress) Stop() {
 		fmt.Print("\r\033[K\n\r\033[K\033[1A\r")
 	}
 	d := time.Since(p.start).Round(time.Second)
-	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n",
+	// Trailing blank line so the summary is not glued to whatever comes next,
+	// which is usually the model-loading spinner.
+	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n\n",
 		humanBytes(p.done.Load()), d)
 }
 
