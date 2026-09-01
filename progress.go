@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -41,6 +43,7 @@ type Progress struct {
 	done    atomic.Int64
 	start   time.Time
 	tty     bool
+	p       palette
 	stop    chan struct{}
 	wg      sync.WaitGroup
 	lastLog time.Time
@@ -48,11 +51,12 @@ type Progress struct {
 }
 
 func NewProgress(total int64) *Progress {
-	st, _ := os.Stdout.Stat()
+	pal := newPalette()
 	return &Progress{
 		total: total,
 		start: time.Now(),
-		tty:   st != nil && st.Mode()&os.ModeCharDevice != 0,
+		tty:   pal.on,
+		p:     pal,
 		stop:  make(chan struct{}),
 	}
 }
@@ -66,6 +70,19 @@ func (p *Progress) Write(b []byte) (int, error) {
 func (p *Progress) Add(n int64) { p.done.Add(n) }
 
 func (p *Progress) Start() {
+	if p.tty {
+		fmt.Printf("\n  %s\n\n", p.p.green("Download progress"))
+		fmt.Print("\033[?25l") // hide the cursor: it parks on the bar and reads as a block
+		// Restore the cursor if the download is interrupted, so Ctrl-C does not
+		// leave the terminal without one.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sig
+			fmt.Print("\033[?25h\n")
+			os.Exit(130)
+		}()
+	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
@@ -91,9 +108,9 @@ func (p *Progress) Stop() {
 	close(p.stop)
 	p.wg.Wait()
 	if p.tty {
-		// Clear all three lines of the block, then come back to the top so the
-		// summary prints where the bar was.
-		fmt.Print("\r\033[K\n\r\033[K\n\r\033[K\033[2A\r")
+		// Clear all four lines of the block, come back to the top so the summary
+		// prints where the bar was, and give the cursor back.
+		fmt.Print("\r\033[K\n\r\033[K\n\r\033[K\n\r\033[K\033[3A\r\033[?25h")
 	}
 	d := time.Since(p.start).Round(time.Second)
 	fmt.Printf("\n  Downloaded %s in %s. It is now cached and will not be fetched again.\n",
@@ -124,21 +141,36 @@ func (p *Progress) render() {
 			return
 		}
 		p.lastLog = time.Now()
-		fmt.Printf("  Downloading… %.0f%%  %s of %s  at %s/s\n", frac*100,
+		fmt.Printf("  Downloading… %.3f%%  %s of %s  at %s/s\n", frac*100,
 			humanBytes(done), humanBytes(total), humanBytes(int64(speed)))
 		return
 	}
 
 	const w = 34
-	full := int(frac * w)
-	bar := strings.Repeat("█", full) + strings.Repeat("░", w-full)
-	line := fmt.Sprintf("  %s %3.0f%%  %s / %s  %s/s  eta %s",
-		bar, frac*100, humanBytes(done), humanBytes(total), humanBytes(int64(speed)), eta)
-	q := "  " + quotes[p.quote]
+	full := int(frac * float64(w))
+	// The filled cells carry the same blue-to-green fade as the wordmark, keyed
+	// to position in the whole bar so the colours do not shift as it fills.
+	var bar strings.Builder
+	for i := 0; i < w; i++ {
+		if i < full {
+			t := float64(i) / float64(w-1)
+			bar.WriteString(p.p.rgb(
+				int(78+(61-78)*t), int(168+(220-168)*t), int(255+(132-255)*t), "█"))
+		} else {
+			bar.WriteString(p.p.dim("░"))
+		}
+	}
+	line := fmt.Sprintf("  %s  %s  %s  %s  %s",
+		bar.String(),
+		p.p.bold(fmt.Sprintf("%7.3f%%", frac*100)),
+		p.p.dim(fmt.Sprintf("%s / %s", humanBytes(done), humanBytes(total))),
+		p.p.dim(humanBytes(int64(speed))+"/s"),
+		p.p.dim("eta "+eta))
+	q := "  " + p.p.rgb(122, 162, 200, quotes[p.quote])
 
-	// Three lines: bar, a blank, then the quote. Redraw all three each tick and
-	// return the cursor to the top of the block.
-	fmt.Printf("\r\033[K%s\n\r\033[K\n\r\033[K\033[2m%s\033[0m\033[2A\r", line, q)
+	// Four lines: bar, blank, quote, blank. Redraw them all each tick and return
+	// the cursor to the top of the block.
+	fmt.Printf("\r\033[K%s\n\r\033[K\n\r\033[K%s\n\r\033[K\033[3A\r", line, q)
 }
 
 func humanBytes(n int64) string {
