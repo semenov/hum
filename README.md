@@ -160,6 +160,8 @@ Round-trip is verified end to end: call -> `tool_calls` +
 
 ## CLI
 
+Run `hum` with no arguments for a coloured overview of everything below.
+
 ```
 hum start      start in the background, wait until the model is loaded, return
 hum stop       stop it (signals the process group, so the worker dies too)

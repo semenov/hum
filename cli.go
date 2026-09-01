@@ -7,37 +7,6 @@ import (
 	"time"
 )
 
-const usage = `hum — a fast local LLM server for Apple Silicon
-
-usage: hum <command> [flags]
-
-commands:
-  start      start the server in the background and return
-             (first run downloads the model — no setup, no model picking)
-  stop       stop the server
-  restart    stop then start
-  status     show whether it is running, and where
-  logs       show the log  (-f to follow, -n to set line count)
-  serve      run in the foreground (what start launches; useful for debugging)
-  model      show which model was picked for this machine, and why
-  config     print the saved configuration
-  version    print the version
-
-flags for start/serve/restart:
-  --model PATH        override the built-in model choice
-  --addr HOST:PORT    listen address              (default 127.0.0.1:8090)
-  --python PATH       python interpreter for the worker
-  --worker PATH       worker.py location
-  --cache-entries N   conversations kept in the prompt cache   (default 4)
-  --wait DURATION     how long start waits for the model       (default 3m)
-
-examples:
-  hum start
-  hum status
-  hum logs -f
-  hum stop
-`
-
 var version = "0.1.0"
 
 // bindServerFlags layers CLI flags over the saved config.
@@ -52,8 +21,8 @@ func bindServerFlags(fs *flag.FlagSet, cfg *Config) *time.Duration {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Print(usage)
-		os.Exit(2)
+		fmt.Print(helpText())
+		return
 	}
 	cmd := os.Args[1]
 	args := os.Args[2:]
@@ -150,11 +119,10 @@ func main() {
 		fmt.Println("hum " + version)
 
 	case "help", "-h", "--help":
-		fmt.Print(usage)
+		fmt.Print(helpText())
 
 	default:
-		fmt.Fprintf(os.Stderr, "hum: unknown command %q\n\n", cmd)
-		fmt.Print(usage)
+		fmt.Fprintf(os.Stderr, "hum: unknown command %q\nrun `hum help` to see what it can do\n", cmd)
 		os.Exit(2)
 	}
 }
