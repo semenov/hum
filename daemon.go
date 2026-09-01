@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -104,6 +105,12 @@ func startDaemon(cfg Config, wait time.Duration) error {
 			u.Para("The server is listening on http://%s and speaks the OpenAI "+
 				"chat completions API. Point OpenCode, your editor, or any OpenAI "+
 				"SDK at it — no API key is required.", cfg.Addr)
+			if host, _, _ := net.SplitHostPort(cfg.Addr); !isLoopback(host) {
+				u.Warn("This is reachable from your network.")
+				u.Para("There is no authentication, so anyone who can route to this "+
+					"machine can use the model. Fine on a home network, not on a "+
+					"cafe one. Others reach it at %s.", lanURL(cfg.Addr))
+			}
 			u.KV("Model", prettyModel(cfg.Model))
 			u.KV("Process", strconv.Itoa(pid))
 			u.KV("Logs", short(logPath()))
@@ -208,6 +215,35 @@ func logsCmd(follow bool, n int) error {
 			return err
 		}
 	}
+}
+
+// isLoopback reports whether an address is only reachable from this machine.
+func isLoopback(host string) bool {
+	if host == "" {
+		return false // an empty host means every interface
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// lanURL rewrites a wildcard bind into an address other machines can actually
+// type, so the warning is useful rather than just alarming.
+func lanURL(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil &&
+			!n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() {
+			return "http://" + net.JoinHostPort(n.IP.String(), port)
+		}
+	}
+	return "http://" + addr
 }
 
 func short(p string) string {

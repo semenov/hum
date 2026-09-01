@@ -44,6 +44,13 @@ func (u *UI) Fail(format string, a ...any) {
 	u.blank = true
 }
 
+// Warn is for something the user should notice but that is not an error.
+func (u *UI) Warn(format string, a ...any) {
+	fmt.Printf("\n  %s %s\n\n", u.p.rgb(255, 180, 90, "!"),
+		u.p.bold(fmt.Sprintf(format, a...)))
+	u.blank = true
+}
+
 // Head labels a block of key/value lines.
 func (u *UI) Head(title, note string) {
 	line := "\n  " + u.p.green(title)

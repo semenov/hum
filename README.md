@@ -180,7 +180,13 @@ Round-trip is verified end to end: call -> `tool_calls` +
 have to look up every time is a worse port than one that occasionally collides.
 It stays clear of 1234 (LM Studio), 11434 (Ollama) and the usual 8080/8000/3000.
 
-    hum start --addr 127.0.0.1:8080     # if you want a different one
+    hum start --addr 127.0.0.1:8080     # a different port
+    hum start --addr 0.0.0.0:4242       # reachable from a VM or the network
+
+It binds to localhost by default. There is no authentication of any kind, so
+opening it to the network means anyone who can route to the machine can use the
+model — fine at home, not in a cafe. When you do bind wide, `hum start` says so
+and prints the address other machines should use.
 
 ## Agent
 
