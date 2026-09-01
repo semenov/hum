@@ -6,30 +6,34 @@
 </p>
 
 <p align="center">
-  A fast, zero-config local LLM server for Apple&nbsp;Silicon.<br>
-  OpenAI-compatible. One command. No GUI.
+  Run a good LLM on your Mac. One command, nothing to configure.
 </p>
 
----
+<p align="center">
+  <img src="assets/demo.gif" alt="Installing hum, starting it, and asking it a question" width="900">
+</p>
+
+## Get started
+
+```sh
+brew tap semenov/hum https://github.com/semenov/hum
+brew install --HEAD hum
+```
+
+Then:
 
 ```sh
 hum start
 ```
 
-```
-first run: fetching Qwen3.6 35B-A3B (20.4 GB)
-  ███████████████░░░░░░░░░░░░░░░░░░░  44%  9.0 GB / 20.4 GB  86 MB/s  eta 2m13s
-  Somewhere in these weights is a number that means "cat". Nobody knows which one.
+That is it. The first time, it works out how much memory your Mac has, picks a
+model that fits, and downloads it — up to 20 GB, once, with a progress bar and
+something to read while you wait. Every time after that it takes a few seconds.
 
-downloaded 20.4 GB in 4m01s
-starting hum (pid 4909), loading ~/.hum/models/…-35B-A3B-MLX-4bit
-ready on http://127.0.0.1:4242  (logs: ~/.hum/hum.log)
-```
+Now you have an OpenAI-compatible server on **http://127.0.0.1:4242/v1**. No
+account, no API key, no per-token bill, and nothing you type leaves the machine.
 
-No flags, no model to pick, no account. Point OpenCode, your editor, or any
-OpenAI SDK at `http://127.0.0.1:4242/v1` and it works.
-
-Or try it without a client at all:
+## Try it without any setup
 
 ```sh
 hum chat
@@ -38,19 +42,69 @@ hum chat
 ```
   ● Chatting with Qwen3.6 35B-A3B
 
-  you › Name three Roman emperors.
+  you › name three roman emperors
 
-  hum › Three notable Roman emperors include: Augustus, Trajan and Nero…
+  hum › Augustus, Trajan and Marcus Aurelius.
 
-  246 tokens · 398 tok/s · thought for 0.3s
+  246 tokens · 92 tok/s · thought for 0.3s
 ```
 
-## Why
+Or one question at a time, which is handy in a pipe:
 
-Running a local model on a Mac today means either a GUI you have to click
-through, or a stack you have to assemble yourself — and either way you still
-have to guess which model is worth running. `hum` is one binary, one command,
-and a server that gets out of the way.
+```sh
+hum ask "why is the sky blue"
+cat error.log | hum ask "what is failing here?"
+```
+
+## Plug it into your tools
+
+Point anything that speaks the OpenAI API at `http://127.0.0.1:4242/v1`. Most
+tools want three things:
+
+| | |
+|---|---|
+| Base URL | `http://127.0.0.1:4242/v1` |
+| API key | anything at all — it is not checked |
+| Model | anything at all — there is only one |
+
+That covers OpenCode, Cursor, Continue, the `openai` Python and Node SDKs,
+LangChain, and most of the rest.
+
+## The commands
+
+```
+hum            this, with colours
+hum start      start it (downloads the model the first time)
+hum stop       stop it and free the memory
+hum status     is it running, where, which model
+hum chat       talk to it here
+hum agent      the same, but it can read, write and run things
+hum ask "…"    one question, one answer
+hum run "…"    give the agent a task and let it finish
+hum logs -f    watch what it is doing
+hum model      which model was picked for this Mac, and why
+```
+
+## If something is wrong
+
+**It says this Mac cannot run it.** hum needs Apple Silicon — MLX has no other
+target. On an Intel Mac, llama.cpp is the usual answer.
+
+**The download stopped.** Run `hum start` again; it picks up where it left off.
+
+**It will not start.** `hum logs -n 50` shows what the server and the Python
+worker both said.
+
+**You want the memory back.** `hum stop` unloads the model. `rm -rf ~/.hum` also
+removes the downloaded weights and the settings.
+
+## Requirements
+
+An Apple Silicon Mac with at least 8 GB of memory, and macOS. That is all —
+Homebrew brings its own Python and installs `mlx-lm` into a virtualenv of its
+own, so nothing lands in yours.
+
+---
 
 ## The model is chosen for you
 
@@ -75,6 +129,84 @@ To override: `hum start --model /path/to/any/mlx/model`, or set
 `HUM_MODEL_REPO` to any Hugging Face MLX repo.
 
 It is also **faster than the alternatives**, measured rather than asserted.
+
+## The port
+
+4242. Unassigned by IANA, and easy to remember, which is the point — a port you
+have to look up every time is a worse port than one that occasionally collides.
+It stays clear of 1234 (LM Studio), 11434 (Ollama) and the usual 8080/8000/3000.
+
+    hum start --addr 127.0.0.1:8080     # a different port
+    hum start --addr 0.0.0.0:4242       # reachable from a VM or the network
+
+It binds to localhost by default. There is no authentication of any kind — the
+same as LM Studio and Ollama, both of which also bind localhost and ship no auth
+— so opening it to the network means anyone who can route to the machine can use
+the model. Fine at home, not in a cafe. When you do bind wide, `hum start` says
+so and prints the address other machines should use.
+
+Browsers are a separate door. By default no CORS headers are sent, so a page you
+visit cannot reach the server even though it runs on your own machine. Building
+a web app against it needs `--cors`, which lets *any* page reach it:
+
+    hum start --cors
+
+## Reasoning control
+
+This model thinks before it answers, which is often what you want and sometimes
+not — it can spend a thousand tokens deciding what 9.11 versus 9.9 means. All
+three spellings the ecosystem uses are accepted:
+
+```jsonc
+{"reasoning": {"effort": "low"}}      // OpenRouter
+{"reasoning": {"max_tokens": 200}}    // a hard budget
+{"reasoning": {"exclude": true}}      // think, but do not return it
+{"reasoning_effort": "none"}          // OpenAI spelling; none disables thinking
+{"include_reasoning": false}          // legacy, same as exclude
+```
+
+There is no effort dial inside the model, so effort is expressed as how long it
+may think: `minimal` 256 tokens, `low` 1024, `medium` 4096, `high` unbounded.
+The budget is enforced rather than requested — once it is spent, every token
+except `</think>` is masked out, so the model has to stop. `none` is different
+again: the chat template emits an already-closed think block and the model never
+reasons at all.
+
+Measured on "which is larger, 9.11 or 9.9":
+
+| | reasoning | total tokens |
+|---|---|---|
+| default | 2097 chars | 977 |
+| `effort: minimal` | 888 chars | 526 |
+| `reasoning.max_tokens: 200` | 678 chars | 531 |
+| `effort: none` | none | 242 |
+
+Reasoning comes back as both `reasoning_content` and `reasoning`, since clients
+read one or the other.
+
+## Agent
+
+`hum agent` is the same chat with hands, and `hum run "task"` is the same agent
+without a prompt, for scripts:
+
+```sh
+hum run "which file defines the prompt cache, and how big is it?"
+cat error.log | hum ask "what is failing here?"
+```
+
+It has five tools: read a file, list a directory, search the tree, write a file,
+run a shell command.
+
+**What it is allowed to do is deliberately narrow by default.** Reading and
+searching are confined to the directory you start it in. Writing needs
+`--allow-write`, and running commands needs `--allow-shell`; interactively it
+asks before each one instead.
+
+That split is not decoration. During testing the agent was told to write outside
+its directory: `write_file` refused, and the model then routed around it with
+`cat ../../etc/hosts` and `printf > /tmp/...`. A shell cannot be confined to a
+directory, so granting it is a separate, explicit act — and the confirmation
+prompt says so.
 
 ## Benchmarks
 
@@ -174,130 +306,6 @@ chat is unaffected. Note 86.1 with the grammar armed is still above LM Studio's
 Round-trip is verified end to end: call -> `tool_calls` +
 `finish_reason: "tool_calls"`, result fed back as `role: "tool"`, model answers.
 
-## The port
-
-4242. Unassigned by IANA, and easy to remember, which is the point — a port you
-have to look up every time is a worse port than one that occasionally collides.
-It stays clear of 1234 (LM Studio), 11434 (Ollama) and the usual 8080/8000/3000.
-
-    hum start --addr 127.0.0.1:8080     # a different port
-    hum start --addr 0.0.0.0:4242       # reachable from a VM or the network
-
-It binds to localhost by default. There is no authentication of any kind — the
-same as LM Studio and Ollama, both of which also bind localhost and ship no auth
-— so opening it to the network means anyone who can route to the machine can use
-the model. Fine at home, not in a cafe. When you do bind wide, `hum start` says
-so and prints the address other machines should use.
-
-Browsers are a separate door. By default no CORS headers are sent, so a page you
-visit cannot reach the server even though it runs on your own machine. Building
-a web app against it needs `--cors`, which lets *any* page reach it:
-
-    hum start --cors
-
-## Reasoning control
-
-This model thinks before it answers, which is often what you want and sometimes
-not — it can spend a thousand tokens deciding what 9.11 versus 9.9 means. All
-three spellings the ecosystem uses are accepted:
-
-```jsonc
-{"reasoning": {"effort": "low"}}      // OpenRouter
-{"reasoning": {"max_tokens": 200}}    // a hard budget
-{"reasoning": {"exclude": true}}      // think, but do not return it
-{"reasoning_effort": "none"}          // OpenAI spelling; none disables thinking
-{"include_reasoning": false}          // legacy, same as exclude
-```
-
-There is no effort dial inside the model, so effort is expressed as how long it
-may think: `minimal` 256 tokens, `low` 1024, `medium` 4096, `high` unbounded.
-The budget is enforced rather than requested — once it is spent, every token
-except `</think>` is masked out, so the model has to stop. `none` is different
-again: the chat template emits an already-closed think block and the model never
-reasons at all.
-
-Measured on "which is larger, 9.11 or 9.9":
-
-| | reasoning | total tokens |
-|---|---|---|
-| default | 2097 chars | 977 |
-| `effort: minimal` | 888 chars | 526 |
-| `reasoning.max_tokens: 200` | 678 chars | 531 |
-| `effort: none` | none | 242 |
-
-Reasoning comes back as both `reasoning_content` and `reasoning`, since clients
-read one or the other.
-
-## Agent
-
-`hum agent` is the same chat with hands, and `hum run "task"` is the same agent
-without a prompt, for scripts:
-
-```sh
-hum run "which file defines the prompt cache, and how big is it?"
-cat error.log | hum ask "what is failing here?"
-```
-
-It has five tools: read a file, list a directory, search the tree, write a file,
-run a shell command.
-
-**What it is allowed to do is deliberately narrow by default.** Reading and
-searching are confined to the directory you start it in. Writing needs
-`--allow-write`, and running commands needs `--allow-shell`; interactively it
-asks before each one instead.
-
-That split is not decoration. During testing the agent was told to write outside
-its directory: `write_file` refused, and the model then routed around it with
-`cat ../../etc/hosts` and `printf > /tmp/...`. A shell cannot be confined to a
-directory, so granting it is a separate, explicit act — and the confirmation
-prompt says so.
-
-## CLI
-
-Run `hum` with no arguments for a coloured overview of everything below.
-
-```
-hum start      start in the background, wait until the model is loaded, return
-hum chat       talk to the model in the terminal, no client needed
-hum agent      the same, but it can read, write and run things
-hum ask "…"    answer one question and exit
-hum run "…"    give the agent a task, let it finish, print the result
-hum stop       stop it (signals the process group, so the worker dies too)
-hum restart    stop then start
-hum status     running? where? which model? how long?
-hum logs -f    follow the log
-hum model      show which model was picked for this machine
-hum serve      run in the foreground, for debugging
-hum config     show the saved configuration
-```
-
-`start` polls `/health` and only returns once the server actually answers, so a
-script can call `hum start` and immediately send a request.
-
-State lives in `~/.hum/`: `config.json`, `hum.pid`, `hum.log`.
-
-## Install
-
-```sh
-brew tap semenov/hum https://github.com/semenov/hum
-brew install --HEAD hum
-```
-
-The formula builds the binary and creates its own virtualenv with `mlx-lm` and
-`llguidance` inside, so nothing is installed into your Python and there is
-nothing to configure afterwards. Takes about a minute.
-
-Apple Silicon only — `mlx` has no other target.
-
-### From a checkout
-
-```sh
-git clone https://github.com/semenov/hum && cd hum
-python3 -m venv .venv && .venv/bin/pip install mlx-lm llguidance
-go build -o hum .
-./hum start --python .venv/bin/python
-```
-
 ## Limitations
 
 - **One request at a time.** No continuous batching; see the benchmark note.
@@ -323,3 +331,4 @@ go vet ./...
 ## License
 
 MIT
+
