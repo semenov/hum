@@ -10,6 +10,8 @@
   <img src="assets/demo.gif" alt="Installing hum, starting it, and asking it a question" width="900">
 </p>
 
+**[Get started](#get-started)** · **[Commands](#the-commands)** · **[Clients & SDKs](#plug-it-into-your-tools)** · **[From a coding agent](#using-it-from-a-coding-agent)** · **[API](#reasoning-control)** · **[Benchmarks](#benchmarks)** · **[Limitations](#limitations)**
+
 ## Get started
 
 ```sh
@@ -35,7 +37,16 @@ takes a few seconds.
 Now you have an OpenAI-compatible server on **http://127.0.0.1:4242/v1**. No
 account, no API key, no per-token bill, and nothing you type leaves the machine.
 
-## Try it without any setup
+## Requirements
+
+An Apple Silicon Mac with **at least 32 GB** of unified memory. That is all —
+Homebrew brings its own Python and installs `mlx-lm` into a virtualenv of its
+own, so nothing lands in yours.
+
+On a smaller Mac `hum start` stops and says so rather than downloading 20 GB
+first. See [The model](#the-model).
+
+## Talk to it in the terminal
 
 ```sh
 hum chat
@@ -56,6 +67,21 @@ Or one question at a time, which is handy in a pipe:
 ```sh
 hum ask "why is the sky blue"
 cat error.log | hum ask "what is failing here?"
+```
+
+## The commands
+
+```
+hum            this, with colours
+hum start      start it (downloads the model the first time)
+hum stop       stop it and free the memory
+hum status     is it running, where, which model
+hum chat       talk to it here
+hum agent      the same, but it can read, write and run things
+hum ask "…"    one question, one answer
+hum run "…"    give the agent a task and let it finish
+hum logs -f    watch what it is doing
+hum model      which model it runs, where it lives, and how big it is
 ```
 
 ## Plug it into your tools
@@ -299,79 +325,27 @@ takes eight requests at once, which makes `xargs -P 8` the natural shape.
 [**OFFLOADING.md**](OFFLOADING.md) has the rule, measured recipes, and a block
 to paste into `CLAUDE.md` or `AGENTS.md`.
 
-## The commands
+## Agent
 
-```
-hum            this, with colours
-hum start      start it (downloads the model the first time)
-hum stop       stop it and free the memory
-hum status     is it running, where, which model
-hum chat       talk to it here
-hum agent      the same, but it can read, write and run things
-hum ask "…"    one question, one answer
-hum run "…"    give the agent a task and let it finish
-hum logs -f    watch what it is doing
-hum model      which model it runs, where it lives, and how big it is
+`hum agent` is the same chat with hands, and `hum run "task"` is the same agent
+without a prompt, for scripts:
+
+```sh
+hum run "which file defines the prompt cache, and how big is it?"
 ```
 
-## If something is wrong
+It has five tools: read a file, list a directory, search the tree, write a file,
+run a shell command.
 
-**It says this Mac cannot run it.** hum needs Apple Silicon — MLX has no other
-target. On an Intel Mac, llama.cpp is the usual answer. It also needs 32 GB of
-memory for the one model it ships; on a smaller Mac, `hum start --model
-/path/to/any/mlx/model` runs whatever you point it at instead.
+**What it is allowed to do is deliberately narrow by default.** Reading and
+searching are confined to the directory you start it in. Writing needs
+`--allow-write`, and running commands needs `--allow-shell`; interactively it
+asks before each one instead.
 
-**The download stopped.** Run `hum start` again; it picks up where it left off.
-
-**It will not start.** `hum logs -n 50` shows what the server and the Python
-worker both said.
-
-**You want the memory back.** `hum stop` unloads the model. `rm -rf ~/.hum` also
-removes the downloaded weights and the settings.
-
-## Requirements
-
-An Apple Silicon Mac with **at least 32 GB** of unified memory. That is all —
-Homebrew brings its own Python and installs `mlx-lm` into a virtualenv of its
-own, so nothing lands in yours.
-
-On a smaller Mac `hum start` stops and says so rather than downloading
-something first. See [below](#the-model-is-chosen-for-you) for why there is no
-fallback to a smaller model, and what to do instead.
-
----
-
-## The model is chosen for you
-
-There is nothing to configure, and nothing to choose. `hum` runs one model:
-
-| model | download | on an M3 Max |
-|---|---|---|
-| Qwen3.6 35B-A3B, 4-bit | 20.4 GB | 89 tok/s |
-
-That is the whole catalogue, and the reason for the 32 GB requirement — the
-weights plus the KV cache have to stay under the wired limit, which macOS puts
-at roughly 75% of RAM.
-
-**Why no smaller model for a smaller Mac?** Because a tier list is a promise
-that each entry is the best thing that fits, and honouring that means measuring
-every one of them. A model picked by file size alone is a guess with a progress
-bar in front of it. One model that has been benchmarked end to end is worth more
-than five that have not, so a 16 GB Mac gets a clear refusal instead of a
-20-minute download and a disappointment. Smaller tiers may come back once they
-have earned their place.
-
-Meanwhile, nothing stops you running your own: `hum start --model
-/path/to/any/mlx/model` skips the memory check entirely.
-
-`hum model` shows the pick and why. Weights land in `~/.hum/models/` and are
-resumed rather than restarted if a download is interrupted. Delete the
-directory and the next `hum start` fetches it again.
-
-To override: `hum start --model /path/to/any/mlx/model`, or set
-`HUM_MODEL_REPO` to any Hugging Face MLX repo.
-
-It is also **faster than the alternatives**, measured rather than asserted.
+The split matters: a shell cannot be confined to a directory. Asked to write
+outside its directory, the model will route around a refused `write_file` with
+`cat ../../etc/hosts` or `printf > /tmp/...`, so granting the shell is a
+separate and explicit act, and the confirmation prompt says so.
 
 ## Access
 
@@ -385,6 +359,30 @@ though it runs on your own machine.
 hum start --addr 0.0.0.0:4242   # reachable from a VM or the network
 hum start --addr 127.0.0.1:8080 # if 4242 is taken
 hum start --cors                # let *any* web page reach it
+```
+
+## The model
+
+There is nothing to configure, and nothing to choose. `hum` runs one model:
+
+| model | download | on an M3 Max |
+|---|---|---|
+| Qwen3.6 35B-A3B, 4-bit | 20.4 GB | ~90 tok/s |
+
+That is the whole catalogue, and the reason for the 32 GB requirement — the
+weights plus the KV cache have to stay under the wired limit, which macOS puts
+at roughly 75% of RAM.
+
+There is no smaller tier for a smaller Mac, because a tier list is a promise
+that each entry is the best thing that fits, and hum has only measured this one.
+
+Weights land in `~/.hum/models/` and resume rather than restart if a download is
+interrupted. To run something else — including on a Mac under 32 GB, which skips
+the memory check:
+
+```sh
+hum start --model /path/to/any/mlx/model
+HUM_MODEL_REPO=org/repo hum start        # any Hugging Face MLX repo
 ```
 
 ## Reasoning control
@@ -420,101 +418,6 @@ Measured on "which is larger, 9.11 or 9.9":
 Reasoning comes back as both `reasoning_content` and `reasoning`, since clients
 read one or the other.
 
-## Agent
-
-`hum agent` is the same chat with hands, and `hum run "task"` is the same agent
-without a prompt, for scripts:
-
-```sh
-hum run "which file defines the prompt cache, and how big is it?"
-cat error.log | hum ask "what is failing here?"
-```
-
-It has five tools: read a file, list a directory, search the tree, write a file,
-run a shell command.
-
-**What it is allowed to do is deliberately narrow by default.** Reading and
-searching are confined to the directory you start it in. Writing needs
-`--allow-write`, and running commands needs `--allow-shell`; interactively it
-asks before each one instead.
-
-That split is not decoration. During testing the agent was told to write outside
-its directory: `write_file` refused, and the model then routed around it with
-`cat ../../etc/hosts` and `printf > /tmp/...`. A shell cannot be confined to a
-directory, so granting it is a separate, explicit act — and the confirmation
-prompt says so.
-
-## Benchmarks
-
-Qwen3.6-35B-A3B-4bit on an M3 Max (36 GB), single stream, identical prompts and
-sampling, same HTTP client, run sequentially:
-
-| | hum | LM Studio | mlx_lm.server |
-|---|---|---|---|
-| short-prompt decode | **92.2 tok/s** | 84.5 | 72.6 |
-| 9k prompt, cold TTFT | **7.5 s** | 8.1 s | — |
-| multi-turn warm TTFT | **219 ms** | 462 ms | — |
-| alternating 2 chats, TTFT | **148 ms** | 462 ms | — |
-
-For reference, calling mlx-lm as a library with no server at all gives
-92.0 tok/s — so `hum` costs essentially nothing over the ceiling.
-
-The last row is worth a look: LM Studio takes 462 ms whether or not you switch
-conversations, while `hum` drops to 148 ms because several conversation
-prefixes stay resident.
-
-**Concurrency.** Requests are batched, so several callers share a decode step
-rather than queueing behind each other. A step reads the whole model whatever
-the batch size, which is why the aggregate goes up while each individual stream
-slows down:
-
-| clients | aggregate | per client |
-|---|---|---|
-| 1 | 85.5 tok/s | 85.5 |
-| 2 | 95.7 tok/s | 47.9 |
-| 4 | 173.9 tok/s | 43.5 |
-| 8 | 213.6 tok/s | 26.7 |
-
-Single-stream speed is unaffected — 89.7 tok/s measured after the change,
-against 89-92 before it. Streaming and blocking callers mix freely, and the
-context ceiling is shared between them rather than assumed by each.
-
-## How it works
-
-Go can't make MLX faster — the compute is Metal kernels either way. The gain
-comes from *not stealing CPU from the decode loop*.
-
-A decode step on this model is ~11 ms, and the process already spends ~0.87 of a
-core on graph building plus single-threaded Metal command encoding. CPU sits at
-~87% of GPU time, so `step = max(GPU, CPU)`: any extra Python work on the
-generation thread costs throughput almost 1:1. That is exactly what a
-Python-side server does — stop-string trie, thinking-tag state machine,
-detokenisation, SSE JSON, all per token.
-
-So the split is:
-
-```
-[client] --SSE--> [Go: detok, stop, tools, JSON] --pipe--> [Python: prefill + decode]
-```
-
-The Python worker does *only* prefill and the decode loop, and writes raw token
-ids to a pipe. Go does the rest, on other cores.
-
-Detokenisation is exact: the worker exports an `id -> utf-8 bytes` table at
-startup and Go emits only complete runes. Verified **byte-identical** to
-mlx-lm's own detokeniser over a 220-token temp=0 generation including Cyrillic.
-
-### Prompt caching
-
-The KV cache is snapshotted at the *stable* boundary of the conversation — the
-history without the generation prompt — because the template appends
-`<|im_start|>assistant\n<think>` at the end, and next turn the assistant's real
-reply sits at that offset instead. Snapshot the whole prompt and the prefix
-never matches again.
-
-Snapshots are kept in an LRU (4 conversations by default), so switching between
-chats does not throw the cache away.
-
 ## Tool calling
 
 Send `tools` as you would upstream and get `tool_calls` back, with
@@ -528,51 +431,6 @@ generation is constrained by a grammar armed the moment the model starts a
 call, so an invalid one cannot be produced at all — it cannot name a function
 you did not offer, and it cannot break the format. That costs **5.8%** while
 `tools` are present, and nothing otherwise.
-
-## Context
-
-The model's window is **262,144 tokens** and hum does not narrow it — there is
-no cap, no truncation and no sliding window in the server. What runs out first
-is memory.
-
-Only 10 of the 40 layers keep a growing KV cache; the other 30 are
-linear-attention layers whose state is a fixed size however long the
-conversation gets. That makes context unusually cheap here — about **40 KB per
-token**, so even 128k of history is 5 GB.
-
-The cache is not what limits you. Prefill is. Each chunk of the prompt attends
-against everything before it, and that intermediate is transient but large: at
-64k it was reaching 6 GB, which on a 36 GB Mac put the process at 26.8 GB
-against a wired limit of about 27. So hum sizes the prefill chunk from the
-length of the prompt — 2048 tokens for short ones, down to 256 for enormous
-ones — keeping that transient near 2 GB whatever the context. Measured on a
-36 GB M3 Max:
-
-| context | chunk | prefill | resident | peak |
-|---|---|---|---|---|
-| 8k | 2048 | 11 s | 19.0 GB | 21.9 GB |
-| 32k | 1525 | 47 s | 19.7 GB | 22.7 GB |
-| 64k | 762 | 117 s | 21.0 GB | 23.4 GB |
-| 128k | 381 | 385 s | 23.4 GB | 25.7 GB |
-
-The peak barely moves while the context grows sixteenfold, which is the point.
-With a fixed 2048-token chunk the same runs peaked at 21.9, 23.4 and 26.8 GB,
-and 128k did not fit at all. It costs throughput on the middle sizes — 32k went
-from 861 to 675 tok/s — and nothing at all below about 20k, where the chunk is
-2048 either way.
-
-**Practical ceilings:** roughly **128k on a 36 GB Mac**, roughly **64k on
-32 GB**, where the wired limit is around 24 GB. Above that macOS starts
-swapping, and hum will not warn you — see [Limitations](#limitations).
-
-Two more things worth knowing. Prefill slows as context grows, from 714 tok/s
-at 8k to 332 at 128k, so a full 128k prompt is a six-minute wait before the
-first token. You pay it once per conversation rather than once per turn,
-because the prompt cache holds the prefix — but an agent that compacts at 128k
-pays it again each time it compacts, which is why the OpenCode config above
-suggests a limit well below the ceiling. And the cache holds four conversations
-by default (`--cache-entries`), each with its own KV, so four long sessions
-cost four times the memory. It is bounded by count, not by bytes.
 
 ## Structured output
 
@@ -607,15 +465,11 @@ json.loads(r.choices[0].message.content)
 free: measured at 90.2 tok/s unconstrained against 90.4 with a schema, which is
 to say the masking disappears into the noise of an 11 ms decode step.
 
-**Reasoning is off by default here, and that is deliberate.** The grammar is
-armed only once the think block closes, so the two *can* compose — the model
-reasons in prose, then has to produce the object, with `message.reasoning`
-carrying the thinking. But on this model they compose badly. After a thousand
-tokens of prose it writes numbers the way a person would, with separators, and
-a comma inside a JSON number is not legal, so the only tokens the grammar
-leaves are more digits: it emits zeros until it runs out of budget.
-
-Measured over eight cities, asking for `{"population": <integer>}`:
+**Bound your numeric fields.** With no `maximum`, one more digit is always
+valid JSON, so no grammar may forbid it — llguidance cannot, Outlines cannot,
+nothing will. A model that has talked itself into writing `5,450,000` finds the
+comma illegal and emits zeros until it runs out of budget. Measured over eight
+cities asking for `{"population": <integer>}`:
 
 | | parsed |
 |---|---|
@@ -623,17 +477,12 @@ Measured over eight cities, asking for `{"population": <integer>}`:
 | reasoning off, unbounded | 7 of 8 |
 | reasoning off, `"maximum": 50000000` | 8 of 8 |
 
-So a `response_format` request that says nothing about reasoning gets none —
-it moves the odds a long way. Say something (`reasoning`, `reasoning_effort` or
-`include_reasoning`) and you get exactly what you asked for, runaway integers
-included.
+Which is why a `response_format` request that says nothing about reasoning gets
+none — it moves the odds a long way, though only the bound removes the failure.
+Ask for reasoning explicitly and you get it, runaway integers included.
 
-**But turning reasoning off is a mitigation, not a fix. Bounding the field is
-the fix.** With no `maximum`, one more digit is always valid JSON, so no
-grammar may forbid it — llguidance cannot, Outlines cannot, and nothing else
-will either. Give the number a `maximum`, or the string a `pattern`, and the
-failure becomes impossible rather than unlikely. `bench/schema_reliability.py`
-in the research repo reproduces all three rows.
+The grammar is armed only once the think block closes, so reasoning and a
+required shape do compose when you want both.
 
 Enums, nested objects, arrays with `minItems` and integer types are all
 enforced, since llguidance compiles the schema rather than approximating it. If
@@ -663,27 +512,134 @@ and even 3 changes nothing, because the gap between banana and everything else
 is enormous; at 8 the output finally breaks apart. `logit_bias` is the blunt
 one — ban the token for " Lisbon" and the answer comes back "Lisboa".
 
-They are **not** a fix for a runaway inside a JSON schema, which was why I
-built them. Penalising recent digits makes the model choose different digits,
-not close the number: measured, `repetition_penalty` of 1.1 turned
-`231900000000` into `2319705186000`. Bounding the schema is the fix, because
-that is the only thing that makes another digit illegal.
+They do **not** rescue a runaway inside a JSON schema. Penalising recent digits
+makes the model choose different digits rather than close the number:
+`231900000000` became `2319705186000` with `repetition_penalty` at 1.1. Only
+bounding the schema does that.
+
+## Context
+
+**Roughly 128k tokens on a 36 GB Mac, roughly 64k on 32 GB.** The model's own
+window is 262,144, but memory runs out first, and hum measures the real ceiling
+for your machine at startup:
+
+```sh
+hum status          # Context   154,954 tokens, measured against this Mac's memory
+curl -s localhost:4242/v1/models   # "context_length": 154954
+```
+
+Go past it and you get a `400` with `code: "context_length_exceeded"` rather
+than a Mac that starts swapping.
+
+Context is unusually cheap on this model — only 10 of its 40 layers keep a
+growing KV cache, so 128k of history is about 5 GB. What actually limits you is
+prefill: each chunk of the prompt attends against everything before it, and that
+intermediate is transient but large. hum sizes the chunk from the prompt length
+to hold it near 2 GB, which is what makes 128k fit at all.
+
+Prefill is not free at that size: 11 s for 8k tokens, 385 s for 128k. You pay it
+once per conversation rather than once per turn, because the prompt cache keeps
+the prefix — which is also why an agent configured to compact at 128k will pay
+it again on every compaction. Four conversations stay cached by default
+(`--cache-entries`), each holding its own KV.
+
+## Benchmarks
+
+Qwen3.6-35B-A3B-4bit on an M3 Max (36 GB), single stream, identical prompts and
+sampling, same HTTP client, run sequentially:
+
+| | hum | LM Studio | mlx_lm.server |
+|---|---|---|---|
+| short-prompt decode | **92.2 tok/s** | 84.5 | 72.6 |
+| 9k prompt, cold TTFT | **7.5 s** | 8.1 s | — |
+| multi-turn warm TTFT | **219 ms** | 462 ms | — |
+| alternating 2 chats, TTFT | **148 ms** | 462 ms | — |
+
+For reference, calling mlx-lm as a library with no server at all gives
+92.0 tok/s — so `hum` costs essentially nothing over the ceiling.
+
+The last row is worth a look: LM Studio takes 462 ms whether or not you switch
+conversations, while `hum` drops to 148 ms because several conversation
+prefixes stay resident.
+
+**Concurrency.** Requests are batched, so several callers share a decode step
+rather than queueing behind each other. A step reads the whole model whatever
+the batch size, which is why the aggregate goes up while each individual stream
+slows down:
+
+Measured with a different prompt from the table above, so compare rows
+within it rather than across:
+
+| clients | aggregate | per client |
+|---|---|---|
+| 1 | 85.5 tok/s | 85.5 |
+| 2 | 95.7 tok/s | 47.9 |
+| 4 | 173.9 tok/s | 43.5 |
+| 8 | 213.6 tok/s | 26.7 |
+
+Single-stream speed is unaffected — 89.7 tok/s measured after the change,
+against 89-92 before it. Streaming and blocking callers mix freely, and the
+context ceiling is shared between them rather than assumed by each.
+
+## How it works
+
+Go can't make MLX faster — the compute is Metal kernels either way. The gain
+comes from *not stealing CPU from the decode loop*.
+
+A decode step on this model is ~11 ms, and the process already spends ~0.87 of a
+core on graph building plus single-threaded Metal command encoding. CPU sits at
+~87% of GPU time, so `step = max(GPU, CPU)`: any extra Python work on the
+generation thread costs throughput almost 1:1. That is exactly what a
+Python-side server does — stop-string trie, thinking-tag state machine,
+detokenisation, SSE JSON, all per token.
+
+So the split is:
+
+```
+[client] --SSE--> [Go: detok, stop, tools, JSON] --pipe--> [Python: prefill + decode]
+```
+
+The Python worker does *only* prefill and the decode loop, and writes raw token
+ids to a pipe. Go does the rest, on other cores.
+
+Detokenisation is exact rather than approximate: the worker exports an
+`id -> utf-8 bytes` table at startup and Go emits only complete runes.
+
+### Prompt caching
+
+The KV cache is snapshotted at the *stable* boundary of the conversation — the
+history without the generation prompt — because the template appends
+`<|im_start|>assistant\n<think>` at the end, and next turn the assistant's real
+reply sits at that offset instead. Snapshot the whole prompt and the prefix
+never matches again.
+
+Snapshots are kept in an LRU (4 conversations by default), so switching between
+chats does not throw the cache away.
+
+## If something is wrong
+
+**It says this Mac cannot run it.** hum needs Apple Silicon — MLX has no other
+target. On an Intel Mac, llama.cpp is the usual answer. It also needs 32 GB of
+memory for the one model it ships; on a smaller Mac, `hum start --model
+/path/to/any/mlx/model` runs whatever you point it at instead.
+
+**The download stopped.** Run `hum start` again; it picks up where it left off.
+
+**It will not start.** `hum logs -n 50` shows what the server and the Python
+worker both said.
+
+**You want the memory back.** `hum stop` unloads the model. `rm -rf ~/.hum` also
+removes the downloaded weights and the settings.
 
 ## Limitations
 
-- Context is bounded by memory rather than by a setting. Nothing stops you
-  sending a prompt too large for the machine, and hum neither advertises a
-  context length in `/v1/models` nor returns `context_length_exceeded` — so a
-  client has no way to find the limit and no error when it crosses it. What you
-  get instead is swapping. This is why the OpenCode config above sets `limit`
-  by hand. See [Context](#context).
 - A client that disconnects mid-request does not stop the work: the worker
   finishes generating and the tokens are dropped. Wasted compute, not a leak.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.
 - Not implemented: `tool_choice`, `logprobs`, `n`, `seed`, LoRA.
-- No auth and no request limits — do not expose this to a network.
+- No auth and no rate limiting — see [Access](#access).
 - Prompt-cache reuse is not bit-deterministic: resuming from a snapshot changes
   prefill chunk boundaries, which changes rounding, which can flip a token.
   Semantically equivalent, not byte-identical. This is inherent to prefix
