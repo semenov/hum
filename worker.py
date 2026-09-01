@@ -323,6 +323,7 @@ for line in sys.stdin:
              if (guard_on and names and TOOL_OPEN and TOOL_CLOSE) else None)
     n = 0
     first = True
+    hit_eos = False
     w = out.write
     for tid, _ in generate_step(mx.array(todo), model,
                                 max_tokens=req.get("max_tokens", 256),
@@ -330,9 +331,14 @@ for line in sys.stdin:
                                 logits_processors=procs):
         if first:
             w(b"P" + struct.pack("<I", len(prompt))); out.flush(); first = False
-        if tid in eos: break
+        if tid in eos:
+            hit_eos = True
+            break
         w(b"T" + struct.pack("<I", tid)); out.flush()
         n += 1
+    # Without this the client cannot tell a finished answer from one chopped
+    # off at max_tokens, which is what finish_reason exists to say.
+    w(b"F" + struct.pack("<I", 0 if hit_eos else 1))
     if first:
         w(b"P" + struct.pack("<I", len(prompt)))
     w(b"E" + struct.pack("<I", n)); out.flush()

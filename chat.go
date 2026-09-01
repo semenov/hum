@@ -92,7 +92,9 @@ func chatCmd(cfg Config) error {
 // assistant text and a one-line summary of the timings.
 func streamChat(addr string, history []map[string]string, u *UI, showThinking bool) (string, string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model": "hum", "messages": history, "stream": true, "max_tokens": 2048,
+		// A reasoning model can spend thousands of tokens thinking before it
+		// writes anything, so the budget has to leave room for both.
+		"model": "hum", "messages": history, "stream": true, "max_tokens": 16384,
 	})
 	resp, err := http.Post("http://"+addr+"/v1/chat/completions",
 		"application/json", bytes.NewReader(body))
@@ -113,6 +115,7 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 	var ttft time.Duration
 	n := 0
 	thinking := false
+	finish := ""
 	lastTick := time.Time{}
 
 	sc := bufio.NewScanner(resp.Body)
@@ -124,7 +127,8 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 		}
 		var ev struct {
 			Choices []struct {
-				Delta struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
 					Content   string `json:"content"`
 					Reasoning string `json:"reasoning_content"`
 				} `json:"delta"`
@@ -132,6 +136,9 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 		}
 		if json.Unmarshal([]byte(line[6:]), &ev) != nil || len(ev.Choices) == 0 {
 			continue
+		}
+		if r := ev.Choices[0].FinishReason; r != "" {
+			finish = r
 		}
 		d := ev.Choices[0].Delta
 		// The chain of thought is long and mostly noise on a first look, so by
@@ -177,12 +184,27 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 		}
 	}
 	wrap.Flush()
+	if thinking {
+		fmt.Print("\r\033[K") // drop the thinking counter, nothing replaced it
+	}
+	if answer.Len() == 0 {
+		fmt.Printf("  %s ", u.p.green("hum ›"))
+		if finish == "length" {
+			fmt.Print(u.p.dim("(it used the whole token budget reasoning and never " +
+				"got to an answer — try asking something narrower, or /think to watch it)"))
+		} else {
+			fmt.Print(u.p.dim("(no answer came back)"))
+		}
+	}
 	total := time.Since(start)
 	rate := 0.0
 	if total > 0 && n > 1 {
 		rate = float64(n-1) / total.Seconds()
 	}
 	st := fmt.Sprintf("%d tokens · %.0f tok/s", n, rate)
+	if finish == "length" {
+		st += " · cut off at the token limit"
+	}
 	if thoughtFor > 0 {
 		st += fmt.Sprintf(" · thought for %.1fs", thoughtFor.Seconds())
 	}

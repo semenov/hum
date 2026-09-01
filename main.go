@@ -215,6 +215,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	if !req.Stream {
 		var content, reasoning strings.Builder
 		var calls []ToolCall
+		truncated := false
 		for {
 			ev, err := s.w.next()
 			if err != nil {
@@ -231,6 +232,10 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			}
 			if ev.kind == 'K' {
 				sp.SetThinking(ev.val == 1)
+				continue
+			}
+			if ev.kind == 'F' {
+				truncated = ev.val == 1
 				continue
 			}
 			if ev.kind != 'T' {
@@ -262,6 +267,9 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			msg["reasoning_content"] = reasoning.String()
 		}
 		finish := "stop"
+		if truncated {
+			finish = "length"
+		}
 		if len(calls) > 0 {
 			finish = "tool_calls"
 			msg["tool_calls"] = toolCallsJSON(calls, id)
@@ -302,6 +310,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	var stopTail []byte
 	var full strings.Builder
 	nCalls := 0
+	truncated := false
 	stopped := false
 
 	push := func(evs []Event) {
@@ -361,6 +370,10 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			sp.SetThinking(ev.val == 1)
 			continue
 		}
+		if ev.kind == 'F' {
+			truncated = ev.val == 1
+			continue
+		}
 		if ev.kind != 'T' {
 			continue
 		}
@@ -369,6 +382,9 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	push(sp.Flush())
 
 	finish := "stop"
+	if truncated {
+		finish = "length"
+	}
 	if nCalls > 0 {
 		finish = "tool_calls"
 	}
