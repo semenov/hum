@@ -174,6 +174,30 @@ chat is unaffected. Note 86.1 with the grammar armed is still above LM Studio's
 Round-trip is verified end to end: call -> `tool_calls` +
 `finish_reason: "tool_calls"`, result fed back as `role: "tool"`, model answers.
 
+## Agent
+
+`hum agent` is the same chat with hands, and `hum run "task"` is the same agent
+without a prompt, for scripts:
+
+```sh
+hum run "which file defines the prompt cache, and how big is it?"
+cat error.log | hum ask "what is failing here?"
+```
+
+It has five tools: read a file, list a directory, search the tree, write a file,
+run a shell command.
+
+**What it is allowed to do is deliberately narrow by default.** Reading and
+searching are confined to the directory you start it in. Writing needs
+`--write`, and running commands needs `--shell`; interactively it asks before
+each one instead.
+
+That split is not decoration. During testing the agent was told to write outside
+its directory: `write_file` refused, and the model then routed around it with
+`cat ../../etc/hosts` and `printf > /tmp/...`. A shell cannot be confined to a
+directory, so granting it is a separate, explicit act — and the confirmation
+prompt says so.
+
 ## CLI
 
 Run `hum` with no arguments for a coloured overview of everything below.
@@ -181,6 +205,9 @@ Run `hum` with no arguments for a coloured overview of everything below.
 ```
 hum start      start in the background, wait until the model is loaded, return
 hum chat       talk to the model in the terminal, no client needed
+hum agent      the same, but it can read, write and run things
+hum ask "…"    answer one question and exit
+hum run "…"    give the agent a task, let it finish, print the result
 hum stop       stop it (signals the process group, so the worker dies too)
 hum restart    stop then start
 hum status     running? where? which model? how long?

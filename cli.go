@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -74,6 +75,33 @@ func main() {
 			if err := startDaemon(cfg, *wait); err != nil {
 				fail(err)
 			}
+		}
+
+	case "ask", "run", "agent":
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		write := fs.Bool("write", false, "let it create and overwrite files in this directory")
+		shell := fs.Bool("shell", false, "let it run shell commands (not confined to this directory)")
+		yes := fs.Bool("yes", false, "shorthand for --write --shell")
+		quiet := fs.Bool("quiet", false, "print only the final answer")
+		if err := fs.Parse(args); err != nil {
+			fail(err)
+		}
+		query := strings.Join(fs.Args(), " ")
+		aw, as := *write || *yes, *shell || *yes
+		var err error
+		switch cmd {
+		case "ask":
+			err = askCmd(cfg, query)
+		case "run":
+			err = runCmd(cfg, query, aw, as, *quiet)
+		default:
+			err = agentCmd(cfg, aw, as)
+		}
+		if err != nil {
+			if err == errQuiet {
+				os.Exit(1)
+			}
+			fail(err)
 		}
 
 	case "chat":

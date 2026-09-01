@@ -104,6 +104,9 @@ type cmdDoc struct{ name, desc string }
 var commands = []cmdDoc{
 	{"start", "download the model if needed, then serve in the background"},
 	{"chat", "talk to the model right here in the terminal"},
+	{"agent", "same, but it can read, write and run things for you"},
+	{"ask", "answer one question and exit  (hum ask \"why is the sky blue\")"},
+	{"run", "give the agent a task, let it finish, print the result"},
 	{"stop", "stop the server"},
 	{"restart", "stop, then start again"},
 	{"status", "is it running, on what address, with which model"},
@@ -112,6 +115,13 @@ var commands = []cmdDoc{
 	{"config", "the saved configuration"},
 	{"serve", "run in the foreground, for debugging"},
 	{"version", "print the version"},
+}
+
+var agentFlags = []cmdDoc{
+	{"--write", "let it create and overwrite files in this directory"},
+	{"--shell", "let it run commands — these are NOT confined to it"},
+	{"--yes", "shorthand for both of the above"},
+	{"--quiet", "print only the final answer, for scripts"},
 }
 
 var flagsDoc = []cmdDoc{
@@ -145,10 +155,19 @@ func helpText() string {
 		b.WriteString(fmt.Sprintf("    %s%s%s\n",
 			p.blue(f.name), strings.Repeat(" ", 20-len(f.name)), p.dim(f.desc)))
 	}
+	b.WriteString("\n  " + p.green("AGENT OPTIONS") + p.dim("  (for agent and run)") + "\n")
+	for _, f := range agentFlags {
+		b.WriteString(fmt.Sprintf("    %s%s%s\n",
+			p.blue(f.name), strings.Repeat(" ", 20-len(f.name)), p.dim(f.desc)))
+	}
+	b.WriteString("    " + p.dim("Without these it can only read and search.") + "\n")
+
 	b.WriteString("\n  " + p.green("EXAMPLES") + "\n")
 	for _, e := range [][2]string{
 		{"hum start", "first run downloads the model, later runs are instant"},
 		{"hum chat", "try it out without any client"},
+		{"hum ask \"…\"", "one question, one answer, good in pipes"},
+		{"hum run \"…\"", "give the agent a task and let it finish"},
 		{"hum status", "check it is up"},
 		{"hum logs -f", "watch what it is doing"},
 		{"hum stop", "shut it down and free the memory"},
