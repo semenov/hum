@@ -13,16 +13,18 @@ usage: hum <command> [flags]
 
 commands:
   start      start the server in the background and return
+             (first run downloads the model — no setup, no model picking)
   stop       stop the server
   restart    stop then start
   status     show whether it is running, and where
   logs       show the log  (-f to follow, -n to set line count)
   serve      run in the foreground (what start launches; useful for debugging)
+  model      show which model was picked for this machine, and why
   config     print the saved configuration
   version    print the version
 
 flags for start/serve/restart:
-  --model PATH        model directory (remembered after the first run)
+  --model PATH        override the built-in model choice
   --addr HOST:PORT    listen address              (default 127.0.0.1:8090)
   --python PATH       python interpreter for the worker
   --worker PATH       worker.py location
@@ -30,7 +32,7 @@ flags for start/serve/restart:
   --wait DURATION     how long start waits for the model       (default 3m)
 
 examples:
-  hum start --model ~/models/Qwen3.6-35B-A3B-MLX-4bit
+  hum start
   hum status
   hum logs -f
   hum stop
@@ -67,6 +69,15 @@ func main() {
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		wait := bindServerFlags(fs, &cfg)
 		if err := fs.Parse(args); err != nil {
+			fail(err)
+		}
+		explicit := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "model" {
+				explicit = true
+			}
+		})
+		if err := cfg.resolveModel(explicit); err != nil {
 			fail(err)
 		}
 		if err := cfg.validate(); err != nil {
@@ -115,6 +126,20 @@ func main() {
 		if err := logsCmd(*follow, *n); err != nil {
 			fail(err)
 		}
+
+	case "model":
+		spec := pickModel()
+		dir := modelDir(spec.Repo)
+		state := "not downloaded"
+		if haveModel(dir) {
+			state = "ready"
+		}
+		size := ""
+		if spec.Bytes > 0 {
+			size = " (" + humanBytes(spec.Bytes) + ")"
+		}
+		fmt.Printf("system memory  %s\nselected       %s%s\nrepo           %s\nlocation       %s\nstatus         %s\n",
+			humanBytes(systemRAM()), spec.Name, size, spec.Repo, short(dir), state)
 
 	case "config":
 		fmt.Printf("model         %s\naddr          %s\npython        %s\nworker        %s\ncache-entries %d\nconfig file   %s\n",

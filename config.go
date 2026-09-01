@@ -81,7 +81,7 @@ func saveConfig(cfg Config) error {
 
 func (c Config) validate() error {
 	if c.Model == "" {
-		return errors.New("no model set — run: hum start --model <path>")
+		return errors.New("no model resolved")
 	}
 	if _, err := os.Stat(c.Model); err != nil {
 		return fmt.Errorf("model not found: %s", c.Model)
@@ -89,5 +89,32 @@ func (c Config) validate() error {
 	if _, err := os.Stat(c.Worker); err != nil {
 		return fmt.Errorf("worker not found: %s", c.Worker)
 	}
+	return nil
+}
+
+// resolveModel fills in Model, downloading the built-in pick on first run.
+//
+// explicit says whether --model was passed on this invocation. If it was, the
+// path must exist and is used as given. Otherwise a remembered path is used
+// when it is still there, and anything else means we fetch the catalogue pick
+// again — a managed model that has been deleted should be replaced, not fatal.
+func (c *Config) resolveModel(explicit bool) error {
+	if explicit {
+		if !haveModel(c.Model) {
+			return fmt.Errorf("not a usable model directory: %s", c.Model)
+		}
+		return nil
+	}
+	// haveModel, not os.Stat: an interrupted download leaves the directory in
+	// place with a .part file in it, and that must not read as ready.
+	if c.Model != "" && haveModel(c.Model) {
+		return nil
+	}
+	spec := pickModel()
+	dir, err := EnsureModel(spec)
+	if err != nil {
+		return err
+	}
+	c.Model = dir
 	return nil
 }

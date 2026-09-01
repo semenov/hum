@@ -13,16 +13,21 @@
 ---
 
 ```sh
-hum start --model ~/models/Qwen3.6-35B-A3B-MLX-4bit
+hum start
 ```
 
 ```
-starting hum (pid 4909), loading ~/models/Qwen3.6-35B-A3B-MLX-4bit
+first run: fetching Qwen3.6 35B-A3B (20.4 GB)
+  ███████████████░░░░░░░░░░░░░░░░░░░  44%  9.0 GB / 20.4 GB  86 MB/s  eta 2m13s
+  Somewhere in these weights is a number that means "cat". Nobody knows which one.
+
+downloaded 20.4 GB in 4m01s
+starting hum (pid 4909), loading ~/.hum/models/…-35B-A3B-MLX-4bit
 ready on http://127.0.0.1:8090  (logs: ~/.hum/hum.log)
 ```
 
-Point OpenCode, your editor, or any OpenAI SDK at `http://127.0.0.1:8090/v1`
-and it works. The model path is remembered, so from then on `hum start` is enough.
+No flags, no model to pick, no account. Point OpenCode, your editor, or any
+OpenAI SDK at `http://127.0.0.1:8090/v1` and it works.
 
 ## Why
 
@@ -30,6 +35,28 @@ Running a local model on a Mac today means either a GUI you have to click
 through, or a stack you have to assemble yourself — and either way you still
 have to guess which model is worth running. `hum` is one binary, one command,
 and a server that gets out of the way.
+
+## The model is chosen for you
+
+There is nothing to configure. On first run `hum` looks at how much unified
+memory the machine has and fetches the largest model that comfortably fits —
+weights plus KV cache have to stay under the wired limit, which macOS puts at
+roughly 75% of RAM.
+
+| system memory | model | download |
+|---|---|---|
+| 32 GB+ | Qwen3.6 35B-A3B | 20.4 GB |
+| 24 GB | Qwen3 14B | 8.3 GB |
+| 16 GB | Qwen3 8B | 4.6 GB |
+| 8 GB | Qwen3 4B | 2.3 GB |
+| below | Qwen3 0.6B | 0.4 GB |
+
+`hum model` shows the pick and why. Weights land in `~/.hum/models/` and are
+resumed rather than restarted if a download is interrupted. Delete the
+directory and the next `hum start` fetches it again.
+
+To override: `hum start --model /path/to/any/mlx/model`, or set
+`HUM_MODEL_REPO` to any Hugging Face MLX repo.
 
 It is also **faster than the alternatives**, measured rather than asserted.
 
@@ -139,6 +166,7 @@ hum stop       stop it (signals the process group, so the worker dies too)
 hum restart    stop then start
 hum status     running? where? which model? how long?
 hum logs -f    follow the log
+hum model      show which model was picked for this machine
 hum serve      run in the foreground, for debugging
 hum config     show the saved configuration
 ```
@@ -156,7 +184,7 @@ Needs Go 1.24+, and a Python with `mlx-lm` and `llguidance` for the worker.
 git clone https://github.com/semenov/hum && cd hum
 go build -o hum .
 pip install mlx-lm llguidance
-hum start --model /path/to/an/mlx/model --python $(which python3)
+hum start --python $(which python3)
 ```
 
 ## Limitations
