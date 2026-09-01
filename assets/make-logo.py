@@ -126,18 +126,16 @@ def lockup(ink=None):
     """ink=None emits a self-adapting file: the ink colour follows the viewer's
     colour scheme, so the logo is still right if used without <picture>."""
     if ink is None:
-        # No media query. GitHub's iOS app hands SVGs a light colour scheme no
-        # matter how the page is drawn, so any light-scheme rule paints black
-        # letters onto its black background — measured twice off screenshots,
-        # #0B0C0D on #0D1016, once with the query each way round. A single ink
-        # that holds on both backgrounds is the only thing that survives.
-        style = "<style>.ink{fill:%s}</style>" % INK_AUTO
-        word = "".join(f'<g class="ink" transform="translate({tx+dx:.1f},{base:.1f}) '
-                       f'scale({sc},{-sc})">{glyphs}</g>' if c is None else
-                       f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '
+        # No neutral ink and no colour-scheme rules: the letters are made of the
+        # two chromatic layers themselves. Both are mid-tone, so the wordmark
+        # reads on white and on #0d1117 alike — which matters because GitHub's
+        # iOS app hands SVGs a light colour scheme however it paints the page,
+        # so any query-dependent ink is a coin toss.
+        style = ""
+        word = "".join(f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '
                        f'scale({sc},{-sc})">{glyphs}</g>'
-                       for c, dx in ((CY, -D), (MG, D), (None, 0)))
-        fan = cooler(fx, fy, FR, 'class="ink"')
+                       for c, dx in ((CY, -D), (MG, 0)))
+        fan = cooler(fx, fy, FR, f'fill="{MG}"')
     else:
         style = ""
         word = "".join(f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '
