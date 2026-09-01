@@ -98,16 +98,26 @@ Add a provider to `~/.config/opencode/opencode.json`:
 
 The last line makes it the default; drop it and pick `hum` from `/models`
 inside OpenCode instead. If you already have a `provider` block, add `hum`
-alongside what is there rather than replacing it.
+alongside what is there rather than replacing it. To try it once without
+changing your default:
 
-Two things to expect. Coding agents send long system prompts and a full tool
-schema on every turn, so the first request of a session pauses to prefill
-before anything streams: measured here, a 12k-token prompt takes 10.9 s, about
-1,100 tok/s. Every turn after that reuses the prompt cache and starts almost at
-once — the same 12k prompt again answers in 0.2 s. And a 35B model with 3B active
-parameters is a capable assistant but not a frontier one: it is good at
-localised edits, explanations and tests, and it will struggle where a large
-model would carry a long plan across many files.
+```sh
+opencode run -m hum/hum "read note.txt and tell me what it contains"
+```
+
+Two things to expect. OpenCode sends its system prompt and the whole tool
+schema on every turn — about 7,400 tokens before your message even starts — so
+the first request of a session pauses to prefill, roughly 7 s at the 1,100
+tok/s this machine manages. After that the prompt cache holds the prefix and
+later turns prefill only what is new: 61 and 112 tokens on the two turns that
+followed here. That is why the first question feels slow and the rest do not.
+
+And a 35B model with 3B active parameters is a capable assistant but not a
+frontier one. Checked against OpenCode 1.18.22: reading a file and reporting
+its contents took 14 s across a glob, a read and the answer; fixing a one-line
+bug took 22 s across a glob, a read and an edit, and the edit was right. It is
+good at localised work like that, and it will struggle where a large model
+would carry a long plan across many files.
 
 ### Node.js
 
