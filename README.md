@@ -195,6 +195,39 @@ a web app against it needs `--cors`, which lets *any* page reach it:
 
     hum start --cors
 
+## Reasoning control
+
+This model thinks before it answers, which is often what you want and sometimes
+not — it can spend a thousand tokens deciding what 9.11 versus 9.9 means. All
+three spellings the ecosystem uses are accepted:
+
+```jsonc
+{"reasoning": {"effort": "low"}}      // OpenRouter
+{"reasoning": {"max_tokens": 200}}    // a hard budget
+{"reasoning": {"exclude": true}}      // think, but do not return it
+{"reasoning_effort": "none"}          // OpenAI spelling; none disables thinking
+{"include_reasoning": false}          // legacy, same as exclude
+```
+
+There is no effort dial inside the model, so effort is expressed as how long it
+may think: `minimal` 256 tokens, `low` 1024, `medium` 4096, `high` unbounded.
+The budget is enforced rather than requested — once it is spent, every token
+except `</think>` is masked out, so the model has to stop. `none` is different
+again: the chat template emits an already-closed think block and the model never
+reasons at all.
+
+Measured on "which is larger, 9.11 or 9.9":
+
+| | reasoning | total tokens |
+|---|---|---|
+| default | 2097 chars | 977 |
+| `effort: minimal` | 888 chars | 526 |
+| `reasoning.max_tokens: 200` | 678 chars | 531 |
+| `effort: none` | none | 242 |
+
+Reasoning comes back as both `reasoning_content` and `reasoning`, since clients
+read one or the other.
+
 ## Agent
 
 `hum agent` is the same chat with hands, and `hum run "task"` is the same agent

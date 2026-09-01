@@ -139,6 +139,41 @@ class ToolGuard:
         return llguidance.mlx.apply_token_bitmask(logits, self.bitmask)
 
 
+class ThinkBudget:
+    """Force the think block shut once it has run long enough.
+
+    There is no effort dial on the model, so a budget is the only honest way to
+    express `reasoning.max_tokens` or a lower effort level: when the allowance
+    is gone, mask every token except </think> and the model has to close it.
+    """
+
+    def __init__(self, budget, start_inside=False):
+        self.budget = budget
+        self.seen = 0
+        # The template puts <think> in the prompt rather than having the model
+        # emit it, so the block is usually already open when generation starts.
+        self.inside = start_inside
+        self.spent = 0
+        self.closed = False
+
+    def __call__(self, tokens, logits):
+        new = tokens[self.seen:].tolist()
+        self.seen = tokens.size
+        for t in new:
+            if t == THINK_OPEN:
+                self.inside, self.spent = True, 0
+            elif t == THINK_CLOSE:
+                self.inside = False
+            elif self.inside:
+                self.spent += 1
+        if not self.inside or self.spent < self.budget:
+            return logits
+        # Allow only the closing token.
+        forced = mx.full(logits.shape, -mx.inf, dtype=logits.dtype)
+        idx = mx.array([[THINK_CLOSE]])
+        return mx.put_along_axis(forced, idx, logits[:, THINK_CLOSE:THINK_CLOSE + 1], axis=-1)
+
+
 def tool_names_of(tools):
     out = []
     for t in tools or []:
@@ -252,15 +287,19 @@ def restore(snap):
     return cache
 
 
-def render(msgs, gen_prompt, tools=None):
+def render(msgs, gen_prompt, tools=None, think=True):
     kw = {"tools": tools} if tools else {}
+    if not think:
+        # The template answers this by emitting an already-closed think block,
+        # so the model starts on the answer instead of reasoning first.
+        kw["enable_thinking"] = False
     p = tok.apply_chat_template(msgs, add_generation_prompt=gen_prompt, **kw)
     if isinstance(p, str):
         p = tok.encode(p, add_special_tokens=False)
     return list(p)
 
 
-def stable_len(msgs, full, tools=None):
+def stable_len(msgs, full, tools=None, think=True):
     """Length of the prefix of `full` that will still be a prefix on the next turn.
 
     The generation-prompt suffix (`<|im_start|>assistant\n<think>`) is NOT stable:
@@ -268,7 +307,7 @@ def stable_len(msgs, full, tools=None):
     instead. Rendering without add_generation_prompt gives exactly the history
     part, which the next turn can only append to.
     """
-    st = render(msgs, False, tools)
+    st = render(msgs, False, tools, think)
     return len(st) if full[:len(st)] == st else 0
 
 
@@ -288,9 +327,10 @@ for line in sys.stdin:
     if not line: continue
     req = json.loads(line)
     tools = req.get("tools")
+    think = req.get("enable_thinking", True)
     msgs = normalise(req["messages"])
-    prompt = render(msgs, True, tools)
-    n_stable = stable_len(msgs, prompt, tools)
+    prompt = render(msgs, True, tools, think)
+    n_stable = stable_len(msgs, prompt, tools, think)
 
     cache, todo, n_reused = prepare(prompt)
     out.write(b"C" + struct.pack("<I", n_reused))
@@ -319,8 +359,13 @@ for line in sys.stdin:
     sampler = make_sampler(temp=req.get("temp", 0.7), top_p=req.get("top_p", 1.0))
     names = tool_names_of(tools)
     guard_on = os.environ.get("HUM_NO_GUARD") != "1"
-    procs = ([ToolGuard(names)]
-             if (guard_on and names and TOOL_OPEN and TOOL_CLOSE) else None)
+    procs = []
+    if guard_on and names and TOOL_OPEN and TOOL_CLOSE:
+        procs.append(ToolGuard(names))
+    budget = int(req.get("think_budget") or 0)
+    if think and budget > 0 and THINK_OPEN and THINK_CLOSE:
+        procs.append(ThinkBudget(budget, reasoning_is_open(prompt)))
+    procs = procs or None
     n = 0
     first = True
     hit_eos = False

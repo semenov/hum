@@ -43,6 +43,77 @@ type ChatReq struct {
 	// Kept raw so the chat template receives the full schema (descriptions,
 	// required, nested types). A typed view is decoded separately for parsing.
 	Tools []json.RawMessage `json:"tools"`
+
+	// Reasoning control, in all three shapes the ecosystem uses.
+	Reasoning       *ReasoningReq `json:"reasoning"`
+	ReasoningEffort string        `json:"reasoning_effort"`
+	IncludeReason   *bool         `json:"include_reasoning"`
+}
+
+// ReasoningReq is OpenRouter's object. effort and max_tokens both bound how
+// long the model may think; exclude keeps the thinking out of the reply but
+// still lets it happen.
+type ReasoningReq struct {
+	Effort    string `json:"effort"`
+	MaxTokens int    `json:"max_tokens"`
+	Exclude   bool   `json:"exclude"`
+	Enabled   *bool  `json:"enabled"`
+}
+
+// reasoningPlan is the normalised form the worker is told about.
+type reasoningPlan struct {
+	think   bool // let the model reason at all
+	budget  int  // tokens it may spend on it, 0 for no limit
+	exclude bool // reason, but do not return it
+}
+
+// effortBudget maps the named levels onto token budgets. There is no dial on
+// the model itself, so effort is expressed as how long it may think.
+func effortBudget(effort string) (think bool, budget int, ok bool) {
+	switch strings.ToLower(effort) {
+	case "none":
+		return false, 0, true
+	case "minimal":
+		return true, 256, true
+	case "low":
+		return true, 1024, true
+	case "medium":
+		return true, 4096, true
+	case "high":
+		return true, 0, true
+	}
+	return true, 0, false
+}
+
+func (r ChatReq) reasoning() reasoningPlan {
+	p := reasoningPlan{think: true}
+	if r.ReasoningEffort != "" {
+		if th, b, ok := effortBudget(r.ReasoningEffort); ok {
+			p.think, p.budget = th, b
+		}
+	}
+	// include_reasoning is the legacy spelling: false means exclude.
+	if r.IncludeReason != nil && !*r.IncludeReason {
+		p.exclude = true
+	}
+	if r.Reasoning != nil {
+		q := r.Reasoning
+		if q.Effort != "" {
+			if th, b, ok := effortBudget(q.Effort); ok {
+				p.think, p.budget = th, b
+			}
+		}
+		if q.MaxTokens > 0 {
+			p.budget = q.MaxTokens
+		}
+		if q.Enabled != nil && !*q.Enabled {
+			p.think = false
+		}
+		if q.Exclude {
+			p.exclude = true
+		}
+	}
+	return p
 }
 
 // ---- worker ---------------------------------------------------------------
@@ -188,9 +259,11 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
 
+	plan := req.reasoning()
 	wreq, _ := json.Marshal(map[string]any{
 		"messages": req.Messages, "max_tokens": req.MaxTokens,
 		"temp": temp, "top_p": topP, "tools": req.Tools,
+		"enable_thinking": plan.think, "think_budget": plan.budget,
 	})
 	if _, err := s.w.in.Write(append(wreq, '\n')); err != nil {
 		http.Error(rw, err.Error(), 500)
@@ -263,8 +336,11 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 		msg := map[string]any{"role": "assistant", "content": content.String()}
-		if reasoning.Len() > 0 {
+		if reasoning.Len() > 0 && !plan.exclude {
+			// Two spellings: OpenRouter reads "reasoning", LM Studio and others
+			// read "reasoning_content".
 			msg["reasoning_content"] = reasoning.String()
+			msg["reasoning"] = reasoning.String()
 		}
 		finish := "stop"
 		if truncated {
@@ -317,6 +393,9 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 		for _, e := range evs {
 			switch e.Kind {
 			case evContent, evReasoning:
+				if e.Kind == evReasoning && plan.exclude {
+					continue // asked for, but not to be shown
+				}
 				h := headContent
 				if e.Kind == evReasoning {
 					h = headReason
