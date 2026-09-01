@@ -1,0 +1,6 @@
+# compiled binary (same name as the module)
+/hum
+
+__pycache__/
+*.pyc
+.DS_Store
