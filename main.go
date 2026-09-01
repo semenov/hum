@@ -233,6 +233,11 @@ func (d *Detok) Add(id uint32) string {
 
 // ---- server ---------------------------------------------------------------
 
+// ModelID is what the API calls the model, whatever is actually loaded. A
+// client's configuration should not have to change because the weights did,
+// and a filesystem path is a poor thing to paste into an editor's settings.
+const ModelID = "hum"
+
 type Server struct {
 	w     *Worker
 	model string
@@ -245,7 +250,11 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.MaxTokens == 0 {
-		req.MaxTokens = 512
+		// A thinking model can spend 512 tokens reasoning and return an empty
+		// message, which is what a caller who sent no max_tokens sees first.
+		// OpenAI's own default is the context window; this is a compromise that
+		// leaves room to think and still bounds a runaway.
+		req.MaxTokens = 4096
 	}
 	temp := 0.7
 	if req.Temp != nil {
@@ -538,12 +547,17 @@ func runServer(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	s := &Server{w: w, model: cfg.Model}
+	s := &Server{w: w, model: ModelID}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.chat)
 	mux.HandleFunc("/v1/models", func(rw http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(rw).Encode(map[string]any{"object": "list",
-			"data": []any{map[string]any{"id": cfg.Model, "object": "model"}}})
+			"data": []any{map[string]any{
+				"id": ModelID, "object": "model", "owned_by": "hum",
+				// Not in the OpenAI schema, but this is the only place a client
+				// can find out what it is actually talking to.
+				"name": prettyModel(cfg.Model), "path": cfg.Model,
+			}}})
 	})
 	// Health is what `hum start` polls to know the model finished loading, and
 	// what `hum status` reports.

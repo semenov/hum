@@ -67,10 +67,204 @@ tools want three things:
 |---|---|
 | Base URL | `http://127.0.0.1:4242/v1` |
 | API key | anything at all — it is not checked |
-| Model | anything at all — there is only one |
+| Model | `hum` |
+
+The model id is always `hum`, whatever weights are actually loaded, so nothing
+you configure has to be edited when the model changes. `GET /v1/models` reports
+the real name and path next to it. Any other id works too — the field is
+ignored, because there is only one model to serve.
 
 That covers OpenCode, Cursor, Continue, the `openai` Python and Node SDKs,
-LangChain, and most of the rest.
+LangChain, and most of the rest. Three of them in full:
+
+### OpenCode
+
+Add a provider to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "hum": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "hum (local)",
+      "options": { "baseURL": "http://127.0.0.1:4242/v1" },
+      "models": { "hum": { "name": "Qwen3.6 35B-A3B" } }
+    }
+  },
+  "model": "hum/hum"
+}
+```
+
+The last line makes it the default; drop it and pick `hum` from `/models`
+inside OpenCode instead. If you already have a `provider` block, add `hum`
+alongside what is there rather than replacing it.
+
+Two things to expect. Coding agents send long system prompts and a full tool
+schema on every turn, so the first request of a session pauses to prefill
+before anything streams: measured here, a 12k-token prompt takes 10.9 s, about
+1,100 tok/s. Every turn after that reuses the prompt cache and starts almost at
+once — the same 12k prompt again answers in 0.2 s. And a 35B model with 3B active
+parameters is a capable assistant but not a frontier one: it is good at
+localised edits, explanations and tests, and it will struggle where a large
+model would carry a long plan across many files.
+
+### Node.js
+
+The official SDK, pointed somewhere else:
+
+```sh
+npm install openai
+```
+
+```js
+import OpenAI from "openai";
+
+const hum = new OpenAI({
+  baseURL: "http://127.0.0.1:4242/v1",
+  apiKey: "unused", // required by the SDK, ignored by hum
+});
+
+const r = await hum.chat.completions.create({
+  model: "hum",
+  messages: [{ role: "user", content: "name three roman emperors" }],
+});
+console.log(r.choices[0].message.content);
+```
+
+Streaming is the same call with `stream: true`:
+
+```js
+const stream = await hum.chat.completions.create({
+  model: "hum",
+  messages: [{ role: "user", content: "count from 1 to 5" }],
+  stream: true,
+});
+for await (const part of stream) {
+  process.stdout.write(part.choices[0]?.delta?.content ?? "");
+}
+```
+
+Tools work as they do upstream — send JSON Schema, get a validated call back:
+
+```js
+const r = await hum.chat.completions.create({
+  model: "hum",
+  messages: [{ role: "user", content: "what is the weather in Lisbon?" }],
+  tools: [{
+    type: "function",
+    function: {
+      name: "get_weather",
+      description: "Current weather for a city",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    },
+  }],
+});
+console.log(r.choices[0].message.tool_calls);
+// [{ id: "...", type: "function",
+//    function: { name: "get_weather", arguments: "{\"city\":\"Lisbon\"}" } }]
+```
+
+No dependency at all, if you would rather not have one:
+
+```js
+const r = await fetch("http://127.0.0.1:4242/v1/chat/completions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    model: "hum",
+    messages: [{ role: "user", content: "hello" }],
+  }),
+}).then((r) => r.json());
+console.log(r.choices[0].message.content);
+```
+
+### Python
+
+```sh
+pip install openai
+```
+
+```python
+from openai import OpenAI
+
+hum = OpenAI(base_url="http://127.0.0.1:4242/v1", api_key="unused")
+
+r = hum.chat.completions.create(
+    model="hum",
+    messages=[{"role": "user", "content": "name three roman emperors"}],
+)
+print(r.choices[0].message.content)
+```
+
+Streaming:
+
+```python
+for chunk in hum.chat.completions.create(
+    model="hum",
+    messages=[{"role": "user", "content": "count from 1 to 5"}],
+    stream=True,
+):
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+Tools:
+
+```python
+r = hum.chat.completions.create(
+    model="hum",
+    messages=[{"role": "user", "content": "what is the weather in Lisbon?"}],
+    tools=[{
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }],
+)
+call = r.choices[0].message.tool_calls[0]
+print(call.function.name, call.function.arguments)
+# get_weather {"city":"Lisbon"}
+```
+
+Anything outside the OpenAI schema — such as [reasoning control](#reasoning-control)
+— goes through `extra_body`, since the SDK validates what it sends:
+
+```python
+r = hum.chat.completions.create(
+    model="hum",
+    messages=[{"role": "user", "content": "17 * 23?"}],
+    extra_body={"reasoning": {"effort": "none"}},
+)
+```
+
+In JavaScript the same field goes straight in the request object; the SDK
+passes through what it does not recognise.
+
+### Two things that catch people out
+
+**The thinking is a separate field.** `message.content` is the answer only;
+the reasoning that produced it is in `message.reasoning` (and
+`reasoning_content`, which is the same string under the name some clients
+expect). The Python SDK does not model it, so read it from
+`message.model_extra["reasoning"]`.
+
+**`max_tokens` covers the thinking too.** Send a small one and a thinking model
+can spend the whole budget reasoning and hand back an empty message. hum
+defaults to 4096 for that reason. If you want short answers rather than a short
+budget, turn the thinking off instead: `{"reasoning": {"effort": "none"}}`.
+
+Calling from a browser needs `hum start --cors`, which is off by default
+because any page you have open could otherwise reach the server.
 
 ## The commands
 
