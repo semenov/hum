@@ -24,8 +24,11 @@ if not os.path.exists(FONT):
     urllib.request.urlretrieve(css.split("url(")[1].split(")")[0], FONT)
     print("downloaded Orbitron")
 
-INK_L, PAPER_L = "#0B0D0E", "#FFFFFF"
-INK_D, PAPER_D = "#F2F4F8", "#08090C"
+# Lockups ship with a transparent background and two ink colours, selected by
+# the README's <picture> element. GitHub's themes are #ffffff and #0d1117.
+INK_L = "#0B0D0E"   # for light themes
+INK_D = "#F2F4F8"   # for dark themes
+PAPER_MARK = "#08090C"   # the square mark stays opaque: it is an app icon
 CY, MG = "#22D3EE", "#F0509A"
 
 f = TTFont(FONT); GS = f.getGlyphSet(); CMAP = f.getBestCmap()
@@ -58,11 +61,20 @@ glyphs, adv, sc, top, bot = typeset("HUM", SIZE, tracking=7)
 W, H = adv + PAD*2, top + PAD*2
 base = PAD + top
 
-def lockup(ink, paper):
+def lockup(ink=None):
+    """ink=None emits a self-adapting file: the ink colour follows the viewer's
+    colour scheme via a media query, so the logo is still correct if it is used
+    on its own, without the README's <picture> element."""
+    if ink is None:
+        style = ('<style>.ink{fill:%s}'
+                 '@media(prefers-color-scheme:dark){.ink{fill:%s}}</style>' % (INK_L, INK_D))
+        body = split(glyphs, PAD, base, sc, 'currentColor', D).replace(
+            'fill="currentColor"', 'class="ink"')
+    else:
+        style, body = "", split(glyphs, PAD, base, sc, ink, D)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W:.0f}" height="{H:.0f}" '
-            f'viewBox="0 0 {W:.0f} {H:.0f}" role="img" aria-label="hum">'
-            f'<rect width="{W:.0f}" height="{H:.0f}" fill="{paper}"/>'
-            f'{split(glyphs, PAD, base, sc, ink, D)}</svg>')
+            f'viewBox="0 0 {W:.0f} {H:.0f}" fill="none" role="img" aria-label="hum">'
+            f'{style}{body}</svg>')
 
 # ---- square mark: H, same vibration ---------------------------------------
 M, HS, DM = 512, 300, 16
@@ -75,9 +87,9 @@ def mark(ink, paper):
             f'<rect width="{M}" height="{M}" rx="112" fill="{paper}"/>'
             f'{split(hg, hx, hbase, hsc, ink, DM)}</svg>')
 
-open("assets/logo.svg","w").write(lockup(INK_L, PAPER_L))
-open("assets/logo-dark.svg","w").write(lockup(INK_D, PAPER_D))
-open("assets/mark.svg","w").write(mark(INK_D, PAPER_D))
+open("assets/logo.svg","w").write(lockup())            # adapts to the viewer
+open("assets/logo-dark.svg","w").write(lockup(INK_D))  # fixed light ink, for <picture>
+open("assets/mark.svg","w").write(mark(INK_D, PAPER_MARK))
 for n in ("logo","logo-dark","mark"):
     cairosvg.svg2png(url=f"assets/{n}.svg", write_to=f"assets/{n}.png", scale=2)
 print(f"lockup {W:.0f}x{H:.0f}   mark {M}x{M}")
