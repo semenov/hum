@@ -17,6 +17,7 @@ func bindServerFlags(fs *flag.FlagSet, cfg *Config) *time.Duration {
 	fs.StringVar(&cfg.Python, "python", cfg.Python, "python interpreter")
 	fs.StringVar(&cfg.Worker, "worker", cfg.Worker, "worker.py location")
 	fs.IntVar(&cfg.CacheEntries, "cache-entries", cfg.CacheEntries, "cached conversations")
+	fs.BoolVar(&cfg.CORS, "cors", cfg.CORS, "let pages in a browser reach the server")
 	return fs.Duration("wait", 3*time.Minute, "how long to wait for the model")
 }
 
@@ -170,6 +171,11 @@ func main() {
 		u.KV("Python", short(cfg.Python))
 		u.KV("Worker", short(cfg.Worker))
 		u.KV("Cache", fmt.Sprintf("%d conversations kept warm", cfg.CacheEntries))
+		cors := "off — browsers cannot reach it"
+		if cfg.CORS {
+			cors = "on — any page you visit can reach it"
+		}
+		u.KV("CORS", cors)
 		u.Blank()
 
 	case "version", "-v", "--version":

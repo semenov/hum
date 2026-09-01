@@ -105,6 +105,12 @@ func startDaemon(cfg Config, wait time.Duration) error {
 			u.Para("The server is listening on http://%s and speaks the OpenAI "+
 				"chat completions API. Point OpenCode, your editor, or any OpenAI "+
 				"SDK at it — no API key is required.", cfg.Addr)
+			if cfg.CORS {
+				u.Warn("Any website you visit can reach this server.")
+				u.Para("That is what --cors allows, and it is what a browser app " +
+					"needs. It also means a page you did not expect can send " +
+					"prompts to your model. Turn it off with --cors=false.")
+			}
 			if host, _, _ := net.SplitHostPort(cfg.Addr); !isLoopback(host) {
 				u.Warn("This is reachable from your network.")
 				u.Para("There is no authentication, so anyone who can route to this "+

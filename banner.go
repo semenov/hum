@@ -129,6 +129,7 @@ var flagsDoc = []cmdDoc{
 	{"--addr HOST:PORT", "listen somewhere other than 127.0.0.1:4242"},
 	{"--python PATH", "python interpreter that runs the worker"},
 	{"--cache-entries N", "conversations kept warm in the prompt cache"},
+	{"--cors", "let web pages reach the server (see the warning it prints)"},
 }
 
 func helpText() string {

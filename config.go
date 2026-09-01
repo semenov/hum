@@ -15,6 +15,7 @@ type Config struct {
 	Python       string `json:"python"`
 	Worker       string `json:"worker"`
 	CacheEntries int    `json:"cache_entries"`
+	CORS         bool   `json:"cors"`
 }
 
 func humDir() string {
@@ -67,6 +68,7 @@ func loadConfig() (Config, error) {
 	if saved.CacheEntries > 0 {
 		cfg.CacheEntries = saved.CacheEntries
 	}
+	cfg.CORS = saved.CORS
 	return cfg, nil
 }
 

@@ -397,6 +397,23 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// withCORS lets a page in a browser talk to the server. Off unless asked for:
+// with it on, any site the user visits can reach this port, since the request
+// comes from their own machine and the network never sees it.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Access-Control-Allow-Origin", "*")
+		rw.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		rw.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		rw.Header().Set("Access-Control-Max-Age", "86400")
+		if r.Method == http.MethodOptions {
+			rw.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(rw, r)
+	})
+}
+
 func toolCallsJSON(calls []ToolCall, id string) []any {
 	out := make([]any, 0, len(calls))
 	for i, c := range calls {
@@ -458,6 +475,10 @@ func runServer(cfg Config) error {
 			"pid": os.Getpid(), "uptime_s": int(time.Since(started).Seconds()),
 		})
 	})
+	var h http.Handler = mux
+	if cfg.CORS {
+		h = withCORS(mux)
+	}
 	log.Printf("listening on %s", cfg.Addr)
-	return http.ListenAndServe(cfg.Addr, mux)
+	return http.ListenAndServe(cfg.Addr, h)
 }
