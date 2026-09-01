@@ -59,7 +59,13 @@ const keyWidth = 12
 // Para prints an explanatory paragraph, wrapped and indented under a heading.
 // Output is meant to be read, not grepped, so it gets room to breathe.
 func (u *UI) Para(format string, a ...any) {
-	const width = 68
+	width := termWidth() - 8
+	if width > 68 {
+		width = 68 // long measures are tiring; do not use the whole window
+	}
+	if width < 32 {
+		width = 32
+	}
 	words := strings.Fields(fmt.Sprintf(format, a...))
 	line := ""
 	for _, w := range words {

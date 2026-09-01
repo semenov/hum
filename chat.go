@@ -106,6 +106,8 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 	}
 
 	var answer strings.Builder
+	// "  hum › " is eight columns wide; continuation lines line up under it.
+	wrap := newWrapper(8)
 	start := time.Now()
 	var thoughtFor time.Duration
 	var ttft time.Duration
@@ -169,11 +171,12 @@ func streamChat(addr string, history []map[string]string, u *UI, showThinking bo
 				}
 				thinking = false
 			}
-			fmt.Print(d.Content)
+			wrap.Write(d.Content)
 			answer.WriteString(d.Content)
 			n++
 		}
 	}
+	wrap.Flush()
 	total := time.Since(start)
 	rate := 0.0
 	if total > 0 && n > 1 {
