@@ -278,13 +278,15 @@ hum agent      the same, but it can read, write and run things
 hum ask "…"    one question, one answer
 hum run "…"    give the agent a task and let it finish
 hum logs -f    watch what it is doing
-hum model      which model was picked for this Mac, and why
+hum model      which model it runs, where it lives, and how big it is
 ```
 
 ## If something is wrong
 
 **It says this Mac cannot run it.** hum needs Apple Silicon — MLX has no other
-target. On an Intel Mac, llama.cpp is the usual answer.
+target. On an Intel Mac, llama.cpp is the usual answer. It also needs 32 GB of
+memory for the one model it ships; on a smaller Mac, `hum start --model
+/path/to/any/mlx/model` runs whatever you point it at instead.
 
 **The download stopped.** Run `hum start` again; it picks up where it left off.
 
