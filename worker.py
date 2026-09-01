@@ -25,7 +25,28 @@ from mlx_lm.sample_utils import make_sampler
 MODEL_PATH, VOCAB_OUT = sys.argv[1], sys.argv[2]
 CACHE_ENTRIES = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 out = sys.stdout.buffer
-PREFILL_CHUNK = 2048
+# How many prompt tokens to push through the model at once. The transient cost
+# of one such step is roughly the chunk size times the context it attends
+# against, so a chunk that is comfortable at 8k is what puts the process into
+# swap at 128k. Measured on an M3 Max: 2048 tokens against 64k of context peaks
+# at 26.8 GB, 512 against the same context at 22.6 GB, and the wired limit on a
+# 36 GB machine is about 27. Rather than pick one constant and be wrong at one
+# end, size the chunk so the transient stays near a budget: short prompts keep
+# the fast path, long ones give up throughput in exchange for fitting at all.
+PREFILL_BUDGET = 2 << 30      # bytes of transient we are willing to spend
+PREFILL_PER_PAIR = 44         # measured bytes per (chunk token * context token)
+PREFILL_CHUNK_MAX = 2048
+PREFILL_CHUNK_MIN = 256
+FIXED_CHUNK = int(os.environ.get("HUM_PREFILL_CHUNK", "0"))
+
+
+def prefill_chunk(n_context):
+    if FIXED_CHUNK:
+        return FIXED_CHUNK
+    if n_context <= 0:
+        return PREFILL_CHUNK_MAX
+    fits = PREFILL_BUDGET // (PREFILL_PER_PAIR * n_context)
+    return max(PREFILL_CHUNK_MIN, min(PREFILL_CHUNK_MAX, int(fits)))
 
 model, tok = load(MODEL_PATH)
 mx.eval(model.parameters())
@@ -344,9 +365,10 @@ for line in sys.stdin:
     cut = max(n_stable, n_reused)
     if cut <= n_reused or cut >= len(prompt):
         cut = len(prompt) - 1        # nothing stable to snapshot; keep >=1 token
+    chunk = prefill_chunk(len(prompt))
     def prefill(seq):
-        for i in range(0, len(seq), PREFILL_CHUNK):
-            model(mx.array(seq[i:i + PREFILL_CHUNK])[None], cache=cache)
+        for i in range(0, len(seq), chunk):
+            model(mx.array(seq[i:i + chunk])[None], cache=cache)
             mx.eval([c.state for c in cache])
             mx.clear_cache()   # mlx-lm does this between prefill chunks;
                                # without it allocation pressure builds up

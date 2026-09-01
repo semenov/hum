@@ -89,12 +89,25 @@ Add a provider to `~/.config/opencode/opencode.json`:
       "npm": "@ai-sdk/openai-compatible",
       "name": "hum (local)",
       "options": { "baseURL": "http://127.0.0.1:4242/v1" },
-      "models": { "hum": { "name": "Qwen3.6 35B-A3B" } }
+      "models": {
+        "hum": {
+          "name": "Qwen3.6 35B-A3B",
+          "limit": { "context": 32000, "output": 8000 }
+        }
+      }
     }
   },
   "model": "hum/hum"
 }
 ```
+
+**Do not leave out `limit`.** It is how OpenCode knows when to compact the
+conversation, and for a provider it has never heard of there is no other way to
+find out — the OpenAI API has no field for it, and hum will not refuse an
+oversized prompt either. Without it the session grows until your Mac starts
+swapping, which looks like the machine dying rather than a limit being reached.
+32,000 is safe on any Mac hum runs on; on 36 GB or more you can raise it to
+65536. See [Context](#context) for where those numbers come from.
 
 The last line makes it the default; drop it and pick `hum` from `/models`
 inside OpenCode instead. If you already have a `provider` block, add `hum`
@@ -530,42 +543,56 @@ Round-trip is verified end to end: call -> `tool_calls` +
 
 The model's window is **262,144 tokens** and hum does not narrow it — there is
 no cap, no truncation and no sliding window in the server. What runs out first
-is memory, and not in the place you would expect.
+is memory.
 
 Only 10 of the 40 layers keep a growing KV cache; the other 30 are
-linear-attention layers whose state is a fixed size no matter how long the
-conversation gets. That makes context unusually cheap here — about 35 KB per
-token, measured, against several times that for a dense model of the same size.
+linear-attention layers whose state is a fixed size however long the
+conversation gets. That makes context unusually cheap here — about **40 KB per
+token**, so even 128k of history is 5 GB.
 
-Measured on a 36 GB M3 Max, where the wired-memory limit is around 27 GB:
+The cache is not what limits you. Prefill is. Each chunk of the prompt attends
+against everything before it, and that intermediate is transient but large: at
+64k it was reaching 6 GB, which on a 36 GB Mac put the process at 26.8 GB
+against a wired limit of about 27. So hum sizes the prefill chunk from the
+length of the prompt — 2048 tokens for short ones, down to 256 for enormous
+ones — keeping that transient near 2 GB whatever the context. Measured on a
+36 GB M3 Max:
 
-| context | resident after | peak during prefill | prefill |
-|---|---|---|---|
-| — | 18.4 GB | — | — |
-| 8k | 19.0 GB | 21.9 GB | 8 s |
-| 32k | 19.9 GB | 23.7 GB | 32 s |
-| 64k | 21.0 GB | 27.1 GB | 104 s |
+| context | chunk | prefill | resident | peak |
+|---|---|---|---|---|
+| 8k | 2048 | 11 s | 19.0 GB | 21.9 GB |
+| 32k | 1525 | 47 s | 19.7 GB | 22.7 GB |
+| 64k | 762 | 117 s | 21.0 GB | 23.4 GB |
+| 128k | 381 | 385 s | 23.4 GB | 25.7 GB |
 
-The cache itself is not the problem: 64k of it costs 2.6 GB. The peak is. Each
-2,048-token prefill chunk attends against everything before it, and that score
-matrix is transient but large — 6 GB at 64k, growing linearly with context. At
-64k the peak touches the wired limit on this machine, so **64k is the practical
-ceiling on 36 GB**, not the 256k the model advertises. A 48 GB or 64 GB Mac
-goes further.
+The peak barely moves while the context grows sixteenfold, which is the point.
+With a fixed 2048-token chunk the same runs peaked at 21.9, 23.4 and 26.8 GB,
+and 128k did not fit at all. It costs throughput on the middle sizes — 32k went
+from 861 to 675 tok/s — and nothing at all below about 20k, where the chunk is
+2048 either way.
 
-Two other things worth knowing. Prefill slows as context grows — 1,011 tok/s at
-16k, 616 tok/s at 64k — so a full 64k prompt is a 100-second wait before the
-first token, though the prompt cache means you pay it once per conversation
-rather than once per turn. And the cache holds four conversations by default
-(`--cache-entries`), each with its own KV, so four long sessions cost four
-times the memory. It is bounded by count, not by bytes.
+**Practical ceilings:** roughly **128k on a 36 GB Mac**, roughly **64k on
+32 GB**, where the wired limit is around 24 GB. Above that macOS starts
+swapping, and hum will not warn you — see [Limitations](#limitations).
+
+Two more things worth knowing. Prefill slows as context grows, from 714 tok/s
+at 8k to 332 at 128k, so a full 128k prompt is a six-minute wait before the
+first token. You pay it once per conversation rather than once per turn,
+because the prompt cache holds the prefix — but an agent that compacts at 128k
+pays it again each time it compacts, which is why the OpenCode config above
+suggests a limit well below the ceiling. And the cache holds four conversations
+by default (`--cache-entries`), each with its own KV, so four long sessions
+cost four times the memory. It is bounded by count, not by bytes.
 
 ## Limitations
 
 - **One request at a time.** No continuous batching; see the benchmark note.
-- Context is bounded by memory rather than by a setting: nothing stops you
-  sending a prompt too large for the machine, and what you get is swapping
-  rather than a clear error. See [Context](#context).
+- Context is bounded by memory rather than by a setting. Nothing stops you
+  sending a prompt too large for the machine, and hum neither advertises a
+  context length in `/v1/models` nor returns `context_length_exceeded` — so a
+  client has no way to find the limit and no error when it crosses it. What you
+  get instead is swapping. This is why the OpenCode config above sets `limit`
+  by hand. See [Context](#context).
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.
