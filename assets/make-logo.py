@@ -126,13 +126,12 @@ def lockup(ink=None):
     """ink=None emits a self-adapting file: the ink colour follows the viewer's
     colour scheme, so the logo is still right if used without <picture>."""
     if ink is None:
-        # Default to the mid tone, then sharpen for each scheme. A renderer
-        # that ignores the media queries still gets something legible either
-        # way, instead of black text on a black page.
-        style = ('<style>.ink{fill:%s}'
-                 '@media(prefers-color-scheme:light){.ink{fill:%s}}'
-                 '@media(prefers-color-scheme:dark){.ink{fill:%s}}</style>'
-                 % (INK_AUTO, INK_L, INK_D))
+        # No media queries. GitHub's iOS app hands SVGs a light colour scheme
+        # while drawing the page dark, so a light-scheme rule paints near-black
+        # letters onto a near-black background — measured off a screenshot,
+        # #0B0C0D on #0D1016. One ink that holds up on either background is
+        # worth more here than a crisp one that sometimes vanishes.
+        style = "<style>.ink{fill:%s}</style>" % INK_AUTO
         word = "".join(f'<g class="ink" transform="translate({tx+dx:.1f},{base:.1f}) '
                        f'scale({sc},{-sc})">{glyphs}</g>' if c is None else
                        f'<g fill="{c}" transform="translate({tx+dx:.1f},{base:.1f}) '
