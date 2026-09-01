@@ -141,7 +141,7 @@ func (p *Progress) render() {
 			return
 		}
 		p.lastLog = time.Now()
-		fmt.Printf("  Downloading… %.3f%%  %s of %s  at %s/s\n", frac*100,
+		fmt.Printf("  Downloading… %.2f%%  %s of %s  at %s/s\n", frac*100,
 			humanBytes(done), humanBytes(total), humanBytes(int64(speed)))
 		return
 	}
@@ -162,7 +162,7 @@ func (p *Progress) render() {
 	}
 	line := fmt.Sprintf("  %s  %s  %s  %s  %s",
 		bar.String(),
-		p.p.bold(fmt.Sprintf("%7.3f%%", frac*100)),
+		p.p.bold(fmt.Sprintf("%6.2f%%", frac*100)),
 		p.p.dim(fmt.Sprintf("%s / %s", humanBytes(done), humanBytes(total))),
 		p.p.dim(humanBytes(int64(speed))+"/s"),
 		p.p.dim("eta "+eta))
