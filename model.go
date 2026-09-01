@@ -13,25 +13,27 @@ import (
 	"time"
 )
 
-// A ModelSpec is a model hum will run without being asked. Which one depends on
-// how much unified memory the machine has: weights plus the KV cache have to
-// stay under the wired limit, which macOS puts at roughly 75% of RAM.
+// A ModelSpec is a model hum will run without being asked.
 type ModelSpec struct {
-	Repo   string
-	Name   string
-	Bytes  int64
-	MinRAM int64 // bytes of system memory required to pick this tier
+	Repo  string
+	Name  string
+	Bytes int64
 }
 
 const gb = 1 << 30
 
-// Ordered from largest to smallest; the first that fits wins.
+// MinRAM is the memory hum insists on before it will start. The weights are
+// 20.4 GB and the KV cache grows on top of them, and both have to stay under
+// the wired limit, which macOS puts at roughly 75% of RAM.
+const MinRAM = 32 * gb
+
+// Catalog is deliberately one model. Running a smaller one on a smaller Mac
+// sounds obliging, but the tiers that used to be here were picked by file size
+// and never measured against anything; shipping a model nobody has run is not
+// zero configuration, it is a guess with a progress bar. Machines under MinRAM
+// are turned away with an explanation instead.
 var Catalog = []ModelSpec{
-	{"lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit", "Qwen3.6 35B-A3B", 21 * gb, 32 * gb},
-	{"mlx-community/Qwen3-14B-4bit", "Qwen3 14B", 9 * gb, 24 * gb},
-	{"mlx-community/Qwen3-8B-4bit", "Qwen3 8B", 5 * gb, 16 * gb},
-	{"mlx-community/Qwen3-4B-4bit", "Qwen3 4B", 3 * gb, 8 * gb},
-	{"mlx-community/Qwen3-0.6B-4bit", "Qwen3 0.6B", 1 * gb, 0},
+	{"lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit", "Qwen3.6 35B-A3B", 21 * gb},
 }
 
 func systemRAM() int64 {
@@ -50,13 +52,7 @@ func pickModel() ModelSpec {
 	if r := os.Getenv("HUM_MODEL_REPO"); r != "" {
 		return ModelSpec{Repo: r, Name: r}
 	}
-	ram := systemRAM()
-	for _, m := range Catalog {
-		if ram >= m.MinRAM {
-			return m
-		}
-	}
-	return Catalog[len(Catalog)-1]
+	return Catalog[0]
 }
 
 func modelDir(repo string) string {
@@ -185,8 +181,8 @@ func EnsureModel(spec ModelSpec) (string, error) {
 		u.Para("Fetching %s because HUM_MODEL_REPO asks for it, rather than the "+
 			"model Hum would pick for this Mac.", spec.Repo)
 	} else {
-		u.Para("Hum chose %s for this Mac. It has %s of unified memory, and this "+
-			"is the largest model that comfortably fits alongside its cache.",
+		u.Para("Hum runs %s. This Mac has %s of unified memory, which is enough "+
+			"to keep the weights and the cache resident.",
 			spec.Name, humanBytes(systemRAM()))
 	}
 	u.Para("The download is %s and happens only this once. It resumes where it "+

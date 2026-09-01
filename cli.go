@@ -49,7 +49,7 @@ func main() {
 				explicit = true
 			}
 		})
-		if err := checkArch(newUI()); err != nil {
+		if err := checkMachine(newUI(), explicit || os.Getenv("HUM_MODEL_REPO") != ""); err != nil {
 			os.Exit(1)
 		}
 		if err := cfg.resolveModel(explicit); err != nil {
@@ -139,10 +139,15 @@ func main() {
 		spec := pickModel()
 		dir := modelDir(spec.Repo)
 		u.Head("MODEL", "")
-		u.Para("There is nothing to choose. Hum reads how much unified memory this " +
-			"Mac has and runs the largest model that fits comfortably, because the " +
-			"weights and the cache both have to stay under the wired-memory limit.")
-		u.KV("This Mac", humanBytes(systemRAM())+" of unified memory")
+		u.Para("There is nothing to choose. Hum runs the one model it has been " +
+			"measured against, and asks for a Mac with room to keep the weights " +
+			"and the cache under the wired-memory limit rather than falling back " +
+			"to something smaller it has never run.")
+		mac := humanBytes(systemRAM()) + " of unified memory"
+		if head, _ := memoryProblem(systemRAM()); head != "" {
+			mac += " — below the 32 GB hum needs"
+		}
+		u.KV("This Mac", mac)
 		u.KV("Model", spec.Name)
 		if spec.Bytes > 0 {
 			u.KV("Download", humanBytes(spec.Bytes))

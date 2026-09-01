@@ -28,9 +28,9 @@ Then:
 hum start
 ```
 
-That is it. The first time, it works out how much memory your Mac has, picks a
-model that fits, and downloads it — up to 20 GB, once, with a progress bar and
-something to read while you wait. Every time after that it takes a few seconds.
+That is it. The first time, it downloads the model — 20 GB, once, with a
+progress bar and something to read while you wait. Every time after that it
+takes a few seconds.
 
 Now you have an OpenAI-compatible server on **http://127.0.0.1:4242/v1**. No
 account, no API key, no per-token bill, and nothing you type leaves the machine.
@@ -102,26 +102,38 @@ removes the downloaded weights and the settings.
 
 ## Requirements
 
-An Apple Silicon Mac with at least 8 GB of memory, and macOS. That is all —
+An Apple Silicon Mac with **at least 32 GB** of unified memory. That is all —
 Homebrew brings its own Python and installs `mlx-lm` into a virtualenv of its
 own, so nothing lands in yours.
+
+On a smaller Mac `hum start` stops and says so rather than downloading
+something first. See [below](#the-model-is-chosen-for-you) for why there is no
+fallback to a smaller model, and what to do instead.
 
 ---
 
 ## The model is chosen for you
 
-There is nothing to configure. On first run `hum` looks at how much unified
-memory the machine has and fetches the largest model that comfortably fits —
-weights plus KV cache have to stay under the wired limit, which macOS puts at
-roughly 75% of RAM.
+There is nothing to configure, and nothing to choose. `hum` runs one model:
 
-| system memory | model | download |
+| model | download | on an M3 Max |
 |---|---|---|
-| 32 GB+ | Qwen3.6 35B-A3B | 20.4 GB |
-| 24 GB | Qwen3 14B | 8.3 GB |
-| 16 GB | Qwen3 8B | 4.6 GB |
-| 8 GB | Qwen3 4B | 2.3 GB |
-| below | Qwen3 0.6B | 0.4 GB |
+| Qwen3.6 35B-A3B, 4-bit | 20.4 GB | 89 tok/s |
+
+That is the whole catalogue, and the reason for the 32 GB requirement — the
+weights plus the KV cache have to stay under the wired limit, which macOS puts
+at roughly 75% of RAM.
+
+**Why no smaller model for a smaller Mac?** Because a tier list is a promise
+that each entry is the best thing that fits, and honouring that means measuring
+every one of them. A model picked by file size alone is a guess with a progress
+bar in front of it. One model that has been benchmarked end to end is worth more
+than five that have not, so a 16 GB Mac gets a clear refusal instead of a
+20-minute download and a disappointment. Smaller tiers may come back once they
+have earned their place.
+
+Meanwhile, nothing stops you running your own: `hum start --model
+/path/to/any/mlx/model` skips the memory check entirely.
 
 `hum model` shows the pick and why. Weights land in `~/.hum/models/` and are
 resumed rather than restarted if a download is interrupted. Delete the

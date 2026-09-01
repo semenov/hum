@@ -38,10 +38,32 @@ func archProblem(goos, goarch string, rosetta bool) (headline, detail string) {
 	return "", ""
 }
 
-// checkArch stops before anything expensive happens on a machine that cannot
-// run the model at all.
-func checkArch(u *UI) error {
+// memoryProblem returns the headline and explanation for a Mac with the right
+// chip but not enough memory, or empty strings when there is room. Memory it
+// could not read is not a reason to refuse to start.
+func memoryProblem(ram int64) (headline, detail string) {
+	if ram == 0 || ram >= MinRAM {
+		return "", ""
+	}
+	return "This Mac does not have the memory hum needs.",
+		"Hum runs one model, " + Catalog[0].Name + ", and it asks for 32 GB of " +
+			"unified memory. This Mac has " + humanBytes(ram) + ". The weights " +
+			"alone are " + humanBytes(Catalog[0].Bytes) + " and the cache grows " +
+			"on top of them, so there is nothing to trim. Smaller models do run " +
+			"well on a Mac this size, and hum will carry one once it has been " +
+			"measured rather than guessed at. Until then, point hum at your own " +
+			"with `hum start --model /path/to/mlx/model`, or let LM Studio or " +
+			"Ollama pick from their catalogues."
+}
+
+// checkMachine stops before anything expensive happens on a machine that cannot
+// run the model at all. Naming your own model skips the memory check: whoever
+// did that knows what fits.
+func checkMachine(u *UI, custom bool) error {
 	headline, detail := archProblem(runtime.GOOS, runtime.GOARCH, underRosetta())
+	if headline == "" && !custom {
+		headline, detail = memoryProblem(systemRAM())
+	}
 	if headline == "" {
 		return nil
 	}
