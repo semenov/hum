@@ -671,11 +671,19 @@ threading.Thread(target=_read_stdin, daemon=True).start()
 # mlx-lm's GenerationBatch.filter leaves logits_processors (and samplers)
 # unfiltered when every entry is empty, so the list outlives the sequences it
 # described and the next request's processors land at the wrong index: a
-# schema or tool grammar is silently dropped after any plain request. Handing
-# every request a no-op processor keeps the list filtered but costs more than
-# half of the batched throughput (217 -> 95 tok/s at 8 clients), because it
-# forces the per-sequence Python loop on every step. So fix the filter itself.
-# Upstream: mlx_lm/generate.py, GenerationBatch.filter.
+# schema or tool grammar is silently dropped after any plain request.
+#
+# Upstream fixed this in PR #1772 (commit e2f2fb2, 2026-08-25) by removing the
+# `any()` guards outright. The fix is in no release yet -- the newest on PyPI
+# is 0.31.3, from April -- and requirements.txt pins us there, so we carry it
+# ourselves. This wrapper is behaviourally identical to the upstream change and
+# a no-op on a version that already has it.
+#
+# DELETE THIS once requirements.txt moves to an mlx-lm that contains e2f2fb2.
+#
+# Handing every request a no-op processor instead would also keep the list
+# filtered, but it forces mlx-lm's per-sequence Python loop on every step:
+# measured warm and standalone, 46-51 tok/s single-stream against 84-86.
 from mlx_lm.generate import GenerationBatch as _GB
 _orig_filter = _GB.filter
 
