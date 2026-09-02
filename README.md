@@ -15,7 +15,7 @@
 ## Get started
 
 ```sh
-brew tap semenov/hum https://github.com/semenov/hum
+brew tap semenov/hum
 brew trust semenov/hum
 brew install --HEAD hum
 ```
@@ -655,6 +655,13 @@ go test ./...              # tool-call parser, including chunk-split invariance
 python grammar_test.py     # grammar rejects invalid calls (deterministic)
 go vet ./...
 ```
+
+The Homebrew formula lives in its own tap,
+[semenov/homebrew-hum](https://github.com/semenov/homebrew-hum), because
+Homebrew resolves a tap name to a repository called `homebrew-<name>`. It
+builds from this repository's main branch and reads `worker.py` and
+`requirements.txt` out of that checkout, so a change here and the formula that
+installs it stay in step.
 
 `requirements.txt` is a lockfile: every Python package, transitive ones
 included, pinned and checked by sha256, so `brew install` resolves nothing and
