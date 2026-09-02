@@ -17,9 +17,18 @@ class Hum < Formula
     # own virtualenv so nothing is installed into the user's Python.
     system Formula["python@3.12"].opt_bin/"python3.12", "-m", "venv", libexec/"venv"
     system venv_python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"
-    # Pinned: the worker reaches into mlx-lm's BatchGenerator and tokenizer
-    # internals, so an unplanned upgrade is a broken `hum start`.
-    system venv_python, "-m", "pip", "install", "--quiet", "mlx-lm==0.31.3", "llguidance==1.8.0"
+
+    # requirements.txt is a lockfile: every package, including the transitive
+    # ones, pinned to the version hum was measured against and checked by
+    # sha256. --require-hashes makes pip refuse to resolve anything, so two
+    # machines installing a month apart get the same worker.
+    #
+    # This matters more than it looks. The worker reads mlx-lm's BatchGenerator
+    # and transformers' tokenizer internals -- `_tokenizer`, `_byte_decoder` --
+    # and hands the tokenizer to llguidance. Pinning mlx-lm alone would leave
+    # `mlx>=0.31.2` and `transformers>=5.0.0` free to move underneath it.
+    system venv_python, "-m", "pip", "install", "--quiet", "--require-hashes",
+           "-r", "requirements.txt"
 
     libexec.install "worker.py"
 

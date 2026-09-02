@@ -652,6 +652,13 @@ python grammar_test.py     # grammar rejects invalid calls (deterministic)
 go vet ./...
 ```
 
+`requirements.txt` is a lockfile: every Python package, transitive ones
+included, pinned and checked by sha256, so `brew install` resolves nothing and
+two machines a month apart get the same worker. The worker reads mlx-lm and
+transformers internals, so pinning `mlx-lm` alone would leave `mlx` and
+`transformers` free to move underneath it. Regenerate it from a virtualenv you
+have actually run with `tools/gen_requirements.py`.
+
 ## License
 
 MIT
