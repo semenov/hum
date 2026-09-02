@@ -634,6 +634,10 @@ removes the downloaded weights and the settings.
 ## Limitations
 
 - `stop` sequences are matched in the answer only, not inside the reasoning.
+- Long prompts prefill one at a time. Several callers arriving together with
+  large prompts queue rather than sharing a prefill step, because a batched
+  prefill multiplies the transient memory it needs and this Mac has a wired
+  limit. Decode still batches: eight streams share a step as before.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.

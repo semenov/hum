@@ -17,7 +17,7 @@ id it belongs to, since requests run concurrently):
             b'F' + u32 truncated         (1 if max_tokens ran out)
             b'E' + u32 n_generated       (done)
 """
-import json, os, queue, struct, sys, threading, traceback
+import json, os, queue, struct, sys, threading, time, traceback
 from collections import deque
 import mlx.core as mx
 import llguidance
@@ -590,6 +590,7 @@ def render_request(req):
 
 
 def _render_request(req, rid):
+    t_start = time.perf_counter()
     tools = req.get("tools")
     think = req.get("enable_thinking", True)
     msgs = normalise(req["messages"])
@@ -650,9 +651,14 @@ def _render_request(req, rid):
     # The ceiling is what fits in memory, and the answer has to fit in it
     # alongside the prompt: a generous max_tokens is a limit, not a plan.
     max_tokens = max(1, min(int(req.get("max_tokens", 256)), MAX_CONTEXT - len(prompt)))
+    # render_ms is time spent on this thread, which is the generation thread:
+    # every live stream is paused for it. See FINDINGS, "rendering on the
+    # decode thread".
     print(f"prompt {len(prompt)} | stable {n_stable} | reused {n_reused} "
           f"| prefill {len(prompt) - n_reused} | chunk {chunk} "
-          f"| entries {len(history.entries)}", file=sys.stderr, flush=True)
+          f"| entries {len(history.entries)} "
+          f"| render {(time.perf_counter() - t_start) * 1000:.0f} ms",
+          file=sys.stderr, flush=True)
     return Admitted(
         rid=rid, prompt=prompt, cut=cut, segments=segments, n_reused=n_reused,
         snap_after=snap_after, cache=cache, max_tokens=max_tokens,
@@ -698,11 +704,20 @@ def _aligned_filter(self, keep):
 
 _GB.filter = _aligned_filter
 
+# prefill_batch_size is 1 on purpose, while decode still batches MAX_BATCH.
+# PREFILL_BUDGET sizes a chunk so that ONE request's transient stays near 2 GB,
+# but mlx-lm prefills every sequence in its prompt batch in a single forward
+# pass, so N of them multiply that transient by N. Measured: four clients each
+# sending ~7.5k tokens killed the worker outright with
+# `[METAL] Command buffer execution failed: Insufficient Memory`, which is
+# exactly the `xargs -P 8` shape OFFLOADING.md recommends. Prefilling one
+# request at a time keeps the budget honest; long prompts queue behind each
+# other instead of taking the process down, and decode still shares a step.
 gen = BatchGenerator(
     model,
     stop_tokens=[[t] for t in sorted(eos)],
     completion_batch_size=MAX_BATCH,
-    prefill_batch_size=MAX_BATCH,
+    prefill_batch_size=1,
     prefill_step_size=PREFILL_CHUNK_MAX,
 )
 
@@ -774,6 +789,13 @@ while True:
         continue
 
     prompt_responses, generation_responses = gen.next()
+
+    # Peak transient during prefill is the number that decides whether this
+    # process survives: it is what `prefill_batch_size` multiplies.
+    if WATCH_DEBUG and prompt_responses:
+        print(f"[mem] active {mx.get_active_memory()/2**30:.1f} GB  "
+              f"peak {mx.get_peak_memory()/2**30:.1f} GB  "
+              f"prefilling {len(prompt_responses)}", file=sys.stderr, flush=True)
 
     for r in prompt_responses:
         st = live.get(r.uid)
