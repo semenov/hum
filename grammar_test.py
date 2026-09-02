@@ -1,10 +1,12 @@
 """Deterministic check that the tool grammar actually rejects invalid calls.
 Tests the grammar+tokenizer integration without depending on model behaviour."""
-import json, sys
+import json, os, sys
 import llguidance, llguidance.hf
 from transformers import AutoTokenizer
 
-M = "/Users/semenov/.cache/lm-studio/models/lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit"
+# The model hum downloads on first start; pass another path as the argument.
+M = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser(
+    "~/.hum/models/lmstudio-community__Qwen3.6-35B-A3B-MLX-4bit")
 tok = AutoTokenizer.from_pretrained(M)
 V = max(int(tok.vocab_size), max(int(i) for i in tok.get_vocab().values()) + 1)
 llt = llguidance.hf.from_tokenizer(tok, n_vocab=V, eos_token=[248046, 248044])
@@ -38,12 +40,12 @@ def feed(text, append_close=True):
 
 VALID = "\n<function=get_weather>\n<parameter=city>\nMoscow\n</parameter>\n</function>\n"
 cases = [
-    ("валидный вызов",                       VALID,                                              True),
-    ("второй разрешённый инструмент",        "\n<function=get_time>\n</function>\n",             True),
-    ("ВЫДУМАННОЕ имя функции",               "\n<function=get_stock_price>\n</function>\n",      False),
-    ("имя-префикс разрешённого",             "\n<function=get_weath>\n</function>\n",            False),
-    ("сломанный формат (JSON вместо XML)",   '\n{"name":"get_weather"}\n',                       False),
-    ("пропущен закрывающий </function>",      "\n<function=get_weather>\n",                      False),
+    ("valid call",                           VALID,                                              True),
+    ("second allowed tool",                  "\n<function=get_time>\n</function>\n",             True),
+    ("made-up function name",                "\n<function=get_stock_price>\n</function>\n",      False),
+    ("prefix of an allowed name",            "\n<function=get_weath>\n</function>\n",            False),
+    ("wrong format (JSON instead of tags)",  '\n{"name":"get_weather"}\n',                       False),
+    ("missing closing </function>",          "\n<function=get_weather>\n",                      False),
 ]
 fails = 0
 for name, text, want_ok in cases:
@@ -51,6 +53,6 @@ for name, text, want_ok in cases:
     mark = "OK " if ok == want_ok else "FAIL"
     if ok != want_ok:
         fails += 1
-    print(f"  [{mark}] {name:36} принято={ok!s:5} ожидалось={want_ok}")
-print("\nИТОГ:", "все проверки прошли" if fails == 0 else f"{fails} провалов")
+    print(f"  [{mark}] {name:36} accepted={ok!s:5} expected={want_ok}")
+print("\nRESULT:", "all checks passed" if fails == 0 else f"{fails} failed")
 sys.exit(1 if fails else 0)

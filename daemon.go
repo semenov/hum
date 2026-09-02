@@ -52,7 +52,13 @@ func probe(addr string, timeout time.Duration) (health, error) {
 		return h, err
 	}
 	defer resp.Body.Close()
-	return h, json.NewDecoder(resp.Body).Decode(&h)
+	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+		return h, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return h, fmt.Errorf("server reports: %s", h.Status)
+	}
+	return h, nil
 }
 
 // startDaemon re-execs this binary as a detached `hum serve` child, then waits
@@ -77,10 +83,13 @@ func startDaemon(cfg Config, wait time.Duration) error {
 	if err != nil {
 		return err
 	}
+	// Every setting goes on the command line, so the child does not depend on
+	// what happened to be saved a moment ago.
 	cmd := exec.Command(exe, "serve",
 		"--model", cfg.Model, "--addr", cfg.Addr,
 		"--python", cfg.Python, "--worker", cfg.Worker,
-		"--cache-entries", strconv.Itoa(cfg.CacheEntries))
+		"--cache-entries", strconv.Itoa(cfg.CacheEntries),
+		"--cors="+strconv.FormatBool(cfg.CORS))
 	cmd.Stdout, cmd.Stderr = lf, lf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // survive this shell
 	if err := cmd.Start(); err != nil {
@@ -173,6 +182,12 @@ func statusCmd(cfg Config) error {
 		return nil
 	}
 	h, err := probe(cfg.Addr, 3*time.Second)
+	if err != nil && strings.Contains(err.Error(), "server reports") {
+		u.Fail("Hum is running but its worker has stopped.")
+		u.Para("The server is shutting down; start it again once it has gone.")
+		u.Hint("See why with", "hum logs -n 50")
+		return nil
+	}
 	if err != nil {
 		u.Off("Hum is still starting up.")
 		u.Para("The process is alive but the model has not finished loading yet, " +

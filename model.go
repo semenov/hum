@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 
 // A ModelSpec is a model hum will run without being asked.
@@ -266,5 +265,3 @@ func downloadFile(repo string, f hfFile, dst string, p *Progress) error {
 	}
 	return os.Rename(tmp, dst)
 }
-
-var _ = time.Second

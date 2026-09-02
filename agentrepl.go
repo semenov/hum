@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 )
 
 // agentCmd is chat with hands: the same REPL, but the model can read, search,
@@ -15,7 +16,7 @@ func agentCmd(cfg Config, allowWrite, allowShell bool) error {
 	if err := requireServer(u, cfg); err != nil {
 		return err
 	}
-	h, _ := probe(cfg.Addr, 5000000000)
+	h, _ := probe(cfg.Addr, 5*time.Second)
 	root, err := os.Getwd()
 	if err != nil {
 		return err

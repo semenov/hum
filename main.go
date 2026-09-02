@@ -7,11 +7,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,9 +25,52 @@ import (
 	"unicode/utf8"
 )
 
+// Content is a message body. OpenAI accepts either a string or a list of
+// parts, and the SDKs' multimodal helpers, LangChain and the Vercel AI SDK all
+// send the list form even for plain text. Only text parts are meaningful
+// here; anything else is refused with a reason rather than a decode error.
+type Content string
+
+func (c *Content) UnmarshalJSON(b []byte) error {
+	b = []byte(strings.TrimSpace(string(b)))
+	if len(b) == 0 || string(b) == "null" {
+		*c = ""
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*c = Content(s)
+		return nil
+	}
+	if b[0] == '[' {
+		var parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(b, &parts); err != nil {
+			return err
+		}
+		var texts []string
+		for _, p := range parts {
+			switch p.Type {
+			case "text", "":
+				texts = append(texts, p.Text)
+			default:
+				return fmt.Errorf("content part of type %q is not supported; hum takes text only", p.Type)
+			}
+		}
+		*c = Content(strings.Join(texts, "\n"))
+		return nil
+	}
+	return fmt.Errorf("content must be a string or a list of text parts")
+}
+
 type Msg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string  `json:"role"`
+	Content Content `json:"content"`
 	// Passed straight through to the chat template so a tool round-trip can be
 	// re-rendered on the next turn.
 	ToolCalls  []any  `json:"tool_calls,omitempty"`
@@ -33,13 +79,16 @@ type Msg struct {
 }
 
 type ChatReq struct {
-	Model     string   `json:"model"`
-	Messages  []Msg    `json:"messages"`
-	MaxTokens int      `json:"max_tokens"`
-	Temp      *float64 `json:"temperature"`
-	TopP      *float64 `json:"top_p"`
-	Stream    bool     `json:"stream"`
-	Stop      []string `json:"stop"`
+	Model    string `json:"model"`
+	Messages []Msg  `json:"messages"`
+	// max_completion_tokens is the current OpenAI spelling; max_tokens the one
+	// every client still sends. Either is accepted, the new one wins.
+	MaxTokens           int      `json:"max_tokens"`
+	MaxCompletionTokens int      `json:"max_completion_tokens"`
+	Temp                *float64 `json:"temperature"`
+	TopP                *float64 `json:"top_p"`
+	Stream              bool     `json:"stream"`
+	Stop                []string `json:"stop"`
 	// Kept raw so the chat template receives the full schema (descriptions,
 	// required, nested types). A typed view is decoded separately for parsing.
 	Tools []json.RawMessage `json:"tools"`
@@ -58,6 +107,24 @@ type ChatReq struct {
 	Reasoning       *ReasoningReq `json:"reasoning"`
 	ReasoningEffort string        `json:"reasoning_effort"`
 	IncludeReason   *bool         `json:"include_reasoning"`
+}
+
+// defaultMaxTokens bounds a request that named no limit. A thinking model can
+// spend 512 tokens reasoning and return an empty message, which is what a
+// caller who sent nothing sees first. OpenAI's own default is the context
+// window; this is a compromise that leaves room to think and still bounds a
+// runaway.
+const defaultMaxTokens = 4096
+
+// maxTokens resolves the two spellings and the default.
+func (r ChatReq) maxTokens() int {
+	if r.MaxCompletionTokens > 0 {
+		return r.MaxCompletionTokens
+	}
+	if r.MaxTokens > 0 {
+		return r.MaxTokens
+	}
+	return defaultMaxTokens
 }
 
 // ResponseFormat is OpenAI's structured-output request. "text" is the default
@@ -170,7 +237,7 @@ func (r ChatReq) reasoning() reasoningPlan {
 // behind it.
 func (r ChatReq) workerPayload(plan reasoningPlan, temp, topP float64) map[string]any {
 	return map[string]any{
-		"messages": r.Messages, "max_tokens": r.MaxTokens,
+		"messages": r.Messages, "max_tokens": r.maxTokens(),
 		"temp": temp, "top_p": topP, "tools": r.Tools,
 		"enable_thinking": plan.think, "think_budget": plan.budget,
 		"json_schema":       r.ResponseFormat.grammar(),
@@ -198,8 +265,9 @@ type Worker struct {
 	nextID uint32
 	routes map[uint32]chan event
 	dead   error
+	died   chan struct{} // closed once, when the worker stops
 
-	writeMu sync.Mutex // one whole request line at a time
+	writeMu sync.Mutex // one whole line at a time
 }
 
 // submit registers a request and hands it to the worker, returning the channel
@@ -215,7 +283,8 @@ func (w *Worker) submit(payload map[string]any) (uint32, chan event, error) {
 	id := w.nextID
 	w.nextID++
 	// Buffered generously: the pump must not stall behind one slow HTTP client
-	// while other requests are still generating.
+	// while other requests are still generating. If the buffer does fill, the
+	// pump treats the client as gone rather than waiting for it (see pump).
 	ch := make(chan event, 1024)
 	w.routes[id] = ch
 	w.mu.Unlock()
@@ -226,20 +295,38 @@ func (w *Worker) submit(payload map[string]any) (uint32, chan event, error) {
 		w.release(id)
 		return 0, nil, err
 	}
-	w.writeMu.Lock()
-	_, err = w.in.Write(append(b, '\n'))
-	w.writeMu.Unlock()
-	if err != nil {
+	if err := w.writeLine(b); err != nil {
 		w.release(id)
 		return 0, nil, err
 	}
 	return id, ch, nil
 }
 
+func (w *Worker) writeLine(b []byte) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	_, err := w.in.Write(append(b, '\n'))
+	return err
+}
+
 func (w *Worker) release(id uint32) {
 	w.mu.Lock()
 	delete(w.routes, id)
 	w.mu.Unlock()
+}
+
+// cancel tells the worker to drop a request. A sequence that nobody is
+// reading still shares every decode step with the others, so an abandoned one
+// slows everyone down until its max_tokens run out.
+func (w *Worker) cancel(id uint32) {
+	b, _ := json.Marshal(map[string]any{"cancel": id})
+	_ = w.writeLine(b)
+}
+
+func (w *Worker) deadErr() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dead
 }
 
 // pump reads the worker's event stream and routes each event to its request.
@@ -256,8 +343,18 @@ func (w *Worker) pump() {
 				w.mu.Lock()
 				ch := w.routes[id]
 				w.mu.Unlock()
-				if ch != nil {
-					ch <- ev
+				if ch == nil {
+					continue
+				}
+				select {
+				case ch <- ev:
+				default:
+					// The handler has not drained a thousand events: its client
+					// is not reading. Blocking here would freeze every other
+					// request, so this one is dropped instead.
+					w.release(id)
+					close(ch)
+					w.cancel(id)
 				}
 				continue
 			}
@@ -271,6 +368,7 @@ func (w *Worker) pump() {
 		}
 		w.routes = map[uint32]chan event{}
 		w.mu.Unlock()
+		close(w.died)
 		return
 	}
 }
@@ -316,7 +414,8 @@ func NewWorker(python, script, model string, entries int) (*Worker, error) {
 	log.Printf("worker ready, vocab %d entries, context ceiling %d tokens",
 		len(vocab), maxContext)
 	w := &Worker{cmd: cmd, in: stdin, out: br, vocab: vocab,
-		maxContext: maxContext, routes: map[uint32]chan event{}}
+		maxContext: maxContext, routes: map[uint32]chan event{},
+		died: make(chan struct{})}
 	go w.pump()
 	return w, nil
 }
@@ -338,17 +437,23 @@ func loadVocab(path string) ([][]byte, error) {
 	return v, nil
 }
 
+// event is one message from the worker. Kinds: 'X' prompt over the ceiling,
+// '!' request could not be rendered, 'C' cache reuse, 'K' thinking state,
+// 'P' prefill done, 'T' token, 'F' truncated flag, 'E' end.
 type event struct {
-	kind byte // 'P' prefill done, 'T' token, 'E' end
+	kind byte
 	val  uint32
 }
 
-// recv waits for the next event of a request. A closed channel means the
-// worker died.
+// errClosed means the request's channel was closed under the handler: either
+// the worker died or the pump gave up on this client.
+var errClosed = errors.New("request channel closed")
+
+// recv waits for the next event of a request.
 func recv(ch chan event) (event, error) {
 	ev, ok := <-ch
 	if !ok {
-		return event{}, fmt.Errorf("the worker stopped before finishing this request")
+		return event{}, errClosed
 	}
 	return ev, nil
 }
@@ -399,18 +504,78 @@ type Server struct {
 	model string
 }
 
+// apiError answers in the shape the OpenAI SDKs parse, so a client shows the
+// message rather than "unexpected response".
+func apiError(rw http.ResponseWriter, status int, msg, typ, code string) {
+	rw.Header().Set("Content-Type", "application/json")
+	rw.WriteHeader(status)
+	json.NewEncoder(rw).Encode(map[string]any{"error": map[string]any{
+		"message": msg, "type": typ, "code": code, "param": nil,
+	}})
+}
+
+// outcome is what a request produced besides its text.
+type outcome struct {
+	promptTok, genTok int
+	truncated         bool // max_tokens ran out
+	stopped           bool // a stop sequence matched
+}
+
+// consume drives one request from its first token to its end, handing every
+// content, reasoning and tool-call event to emit. Shared by the streaming and
+// blocking paths so stop sequences and cancellation behave the same in both.
+func (s *Server) consume(id uint32, ch chan event, det *Detok, sp *Splitter, emit func(Event)) (outcome, error) {
+	var o outcome
+	for {
+		ev, err := recv(ch)
+		if err != nil {
+			return o, err
+		}
+		switch ev.kind {
+		case 'E':
+			for _, e := range sp.Flush() {
+				emit(e)
+			}
+			return o, nil
+		case 'P':
+			o.promptTok = int(ev.val)
+		case 'K':
+			sp.SetThinking(ev.val == 1)
+		case 'F':
+			o.truncated = ev.val == 1
+		case 'T':
+			o.genTok++
+			for _, e := range sp.Push(det.Add(ev.val)) {
+				emit(e)
+			}
+			if sp.Stopped() {
+				// The rest of the sequence is not wanted; do not let the worker
+				// spend decode steps on it.
+				o.stopped = true
+				s.w.cancel(id)
+				return o, nil
+			}
+		}
+	}
+}
+
 func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
-	var req ChatReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(rw, err.Error(), 400)
+	if r.Method != http.MethodPost {
+		rw.Header().Set("Allow", http.MethodPost)
+		apiError(rw, http.StatusMethodNotAllowed, "use POST for chat completions",
+			"invalid_request_error", "method_not_allowed")
 		return
 	}
-	if req.MaxTokens == 0 {
-		// A thinking model can spend 512 tokens reasoning and return an empty
-		// message, which is what a caller who sent no max_tokens sees first.
-		// OpenAI's own default is the context window; this is a compromise that
-		// leaves room to think and still bounds a runaway.
-		req.MaxTokens = 4096
+	var req ChatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apiError(rw, http.StatusBadRequest, "could not read the request: "+err.Error(),
+			"invalid_request_error", "invalid_json")
+		return
+	}
+	if len(req.Messages) == 0 {
+		apiError(rw, http.StatusBadRequest, "messages must not be empty",
+			"invalid_request_error", "invalid_request")
+		return
 	}
 	temp := 0.7
 	if req.Temp != nil {
@@ -434,31 +599,41 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	}
 	reqID, ch, err := s.w.submit(req.workerPayload(plan, temp, topP))
 	if err != nil {
-		http.Error(rw, err.Error(), 500)
+		apiError(rw, http.StatusServiceUnavailable, err.Error(), "server_error", "worker_unavailable")
 		return
 	}
+	done := make(chan struct{})
+	defer close(done)
 	defer s.w.release(reqID)
+	// A client that hangs up mid-request should not keep the model busy.
+	go func() {
+		select {
+		case <-r.Context().Done():
+			s.w.cancel(reqID)
+		case <-done:
+		}
+	}()
 
 	// The worker answers with the prompt length before it does anything with
 	// it, so an oversized prompt costs a tokenisation rather than a swap storm.
 	// 'C' (cache reuse) otherwise, which nothing downstream reads.
 	first, err := recv(ch)
 	if err != nil {
-		http.Error(rw, err.Error(), 500)
+		apiError(rw, http.StatusInternalServerError, s.closedReason(), "server_error", "worker_stopped")
 		return
 	}
-	if first.kind == 'X' {
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(rw).Encode(map[string]any{"error": map[string]any{
-			"message": fmt.Sprintf("This prompt is %d tokens and the limit is %d, "+
-				"which is what fits in this Mac's memory alongside the model's "+
-				"weights. Send less, or run hum on a Mac with more memory.",
-				first.val, s.w.maxContext),
-			"type":  "invalid_request_error",
-			"param": "messages",
-			"code":  "context_length_exceeded",
-		}})
+	switch first.kind {
+	case 'X':
+		apiError(rw, http.StatusBadRequest,
+			fmt.Sprintf("This prompt is %d tokens and the limit is %d, which is what "+
+				"fits in this Mac's memory alongside the model's weights. Send less, "+
+				"or run hum on a Mac with more memory.", first.val, s.w.maxContext),
+			"invalid_request_error", "context_length_exceeded")
+		return
+	case '!':
+		apiError(rw, http.StatusBadRequest,
+			"The worker could not turn these messages into a prompt; `hum logs` has the traceback.",
+			"invalid_request_error", "unrenderable_request")
 		return
 	}
 
@@ -471,53 +646,14 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			toolDefs = append(toolDefs, d)
 		}
 	}
-	sp := NewSplitter(toolDefs)
+	sp := NewSplitter(toolDefs, req.Stop)
 	created := time.Now().Unix()
-
-	var promptTok, genTok int
 
 	// ---- non-streaming ----
 	if !req.Stream {
 		var content, reasoning strings.Builder
 		var calls []ToolCall
-		truncated := false
-		for {
-			ev, err := recv(ch)
-			if err != nil {
-				http.Error(rw, err.Error(), 500)
-				return
-			}
-			if ev.kind == 'E' {
-				genTok = int(ev.val)
-				break
-			}
-			if ev.kind == 'P' {
-				promptTok = int(ev.val)
-				continue
-			}
-			if ev.kind == 'K' {
-				sp.SetThinking(ev.val == 1)
-				continue
-			}
-			if ev.kind == 'F' {
-				truncated = ev.val == 1
-				continue
-			}
-			if ev.kind != 'T' {
-				continue
-			}
-			for _, e := range sp.Push(det.Add(ev.val)) {
-				switch e.Kind {
-				case evContent:
-					content.WriteString(e.Text)
-				case evReasoning:
-					reasoning.WriteString(e.Text)
-				case evToolCall:
-					calls = append(calls, *e.Call)
-				}
-			}
-		}
-		for _, e := range sp.Flush() {
+		o, err := s.consume(reqID, ch, det, sp, func(e Event) {
 			switch e.Kind {
 			case evContent:
 				content.WriteString(e.Text)
@@ -526,6 +662,10 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			case evToolCall:
 				calls = append(calls, *e.Call)
 			}
+		})
+		if err != nil {
+			apiError(rw, http.StatusInternalServerError, s.closedReason(), "server_error", "worker_stopped")
+			return
 		}
 		msg := map[string]any{"role": "assistant", "content": content.String()}
 		if reasoning.Len() > 0 && !plan.exclude {
@@ -535,7 +675,7 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			msg["reasoning"] = reasoning.String()
 		}
 		finish := "stop"
-		if truncated {
+		if o.truncated {
 			finish = "length"
 		}
 		if len(calls) > 0 {
@@ -549,8 +689,8 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 			"choices": []any{map[string]any{
 				"index": 0, "finish_reason": finish, "message": msg}},
 			"usage": map[string]int{
-				"prompt_tokens": promptTok, "completion_tokens": genTok,
-				"total_tokens": promptTok + genTok},
+				"prompt_tokens": o.promptTok, "completion_tokens": o.genTok,
+				"total_tokens": o.promptTok + o.genTok},
 		})
 		return
 	}
@@ -561,6 +701,12 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	rw.WriteHeader(200)
 	fl, _ := rw.(http.Flusher)
 	buf := bufio.NewWriterSize(rw, 1<<15)
+	flush := func() {
+		buf.Flush()
+		if fl != nil {
+			fl.Flush()
+		}
+	}
 
 	// Only the delta text changes per token, so the surrounding frame is built once.
 	frame := func(field string) string {
@@ -569,103 +715,65 @@ func (s *Server) chat(rw http.ResponseWriter, r *http.Request) {
 	}
 	headContent, headReason, tail := frame("content"), frame("reasoning_content"), "}}]}\n\n"
 
-	maxStop := 1
-	for _, st := range req.Stop {
-		if len(st) > maxStop {
-			maxStop = len(st)
-		}
-	}
-	var stopTail []byte
-	var full strings.Builder
+	// OpenAI opens every stream by naming the role; strict clients wait for it.
+	fmt.Fprintf(buf, `data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"finish_reason":null,"delta":{"role":"assistant","content":""}}]}`+"\n\n",
+		id, created, mustJSON(s.model))
+	flush()
+
 	nCalls := 0
-	truncated := false
-	stopped := false
-
-	push := func(evs []Event) {
-		for _, e := range evs {
-			switch e.Kind {
-			case evContent, evReasoning:
-				if e.Kind == evReasoning && plan.exclude {
-					continue // asked for, but not to be shown
-				}
-				h := headContent
-				if e.Kind == evReasoning {
-					h = headReason
-				}
-				buf.WriteString(h)
-				writeJSONString(buf, e.Text)
-				buf.WriteString(tail)
-				if e.Kind == evContent && len(req.Stop) > 0 {
-					full.WriteString(e.Text)
-					stopTail = append(stopTail, e.Text...)
-					if len(stopTail) > maxStop*2 {
-						stopTail = append(stopTail[:0], stopTail[len(stopTail)-maxStop*2:]...)
-					}
-					for _, st := range req.Stop {
-						if st != "" && strings.Contains(string(stopTail), st) {
-							stopped = true
-						}
-					}
-				}
-			case evToolCall:
-				b, _ := json.Marshal(map[string]any{
-					"index": nCalls, "id": fmt.Sprintf("%s-call-%d", id, nCalls),
-					"type":     "function",
-					"function": map[string]string{"name": e.Call.Name, "arguments": e.Call.Args},
-				})
-				fmt.Fprintf(buf, `data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"finish_reason":null,"delta":{"tool_calls":[%s]}}]}`+"\n\n",
-					id, created, mustJSON(s.model), b)
-				nCalls++
+	o, err := s.consume(reqID, ch, det, sp, func(e Event) {
+		switch e.Kind {
+		case evContent, evReasoning:
+			if e.Kind == evReasoning && plan.exclude {
+				return // asked for, but not to be shown
 			}
+			h := headContent
+			if e.Kind == evReasoning {
+				h = headReason
+			}
+			buf.WriteString(h)
+			writeJSONString(buf, e.Text)
+			buf.WriteString(tail)
+		case evToolCall:
+			b, _ := json.Marshal(map[string]any{
+				"index": nCalls, "id": fmt.Sprintf("%s-call-%d", id, nCalls),
+				"type":     "function",
+				"function": map[string]string{"name": e.Call.Name, "arguments": e.Call.Args},
+			})
+			fmt.Fprintf(buf, `data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"finish_reason":null,"delta":{"tool_calls":[%s]}}]}`+"\n\n",
+				id, created, mustJSON(s.model), b)
+			nCalls++
 		}
-		buf.Flush()
-		if fl != nil {
-			fl.Flush()
-		}
+		flush()
+	})
+	if err != nil {
+		// The stream is already open, so the only honest thing is to end it.
+		fmt.Fprintf(buf, `data: {"error":{"message":%s,"type":"server_error","code":"worker_stopped"}}`+"\n\n",
+			mustJSON(s.closedReason()))
+		buf.WriteString("data: [DONE]\n\n")
+		flush()
+		return
 	}
-
-	for !stopped {
-		ev, err := recv(ch)
-		if err != nil {
-			return
-		}
-		if ev.kind == 'E' {
-			genTok = int(ev.val)
-			break
-		}
-		if ev.kind == 'P' {
-			promptTok = int(ev.val)
-			continue
-		}
-		if ev.kind == 'K' {
-			sp.SetThinking(ev.val == 1)
-			continue
-		}
-		if ev.kind == 'F' {
-			truncated = ev.val == 1
-			continue
-		}
-		if ev.kind != 'T' {
-			continue
-		}
-		push(sp.Push(det.Add(ev.val)))
-	}
-	push(sp.Flush())
 
 	finish := "stop"
-	if truncated {
+	if o.truncated {
 		finish = "length"
 	}
 	if nCalls > 0 {
 		finish = "tool_calls"
 	}
 	fmt.Fprintf(buf, `data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"finish_reason":"%s","delta":{}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}}`+"\n\n",
-		id, created, mustJSON(s.model), finish, promptTok, genTok, promptTok+genTok)
+		id, created, mustJSON(s.model), finish, o.promptTok, o.genTok, o.promptTok+o.genTok)
 	buf.WriteString("data: [DONE]\n\n")
-	buf.Flush()
-	if fl != nil {
-		fl.Flush()
+	flush()
+}
+
+// closedReason explains a channel closed under a handler.
+func (s *Server) closedReason() string {
+	if err := s.w.deadErr(); err != nil {
+		return "the worker stopped before finishing this request: " + err.Error()
 	}
+	return "the request was dropped because the client stopped reading"
 }
 
 // withCORS lets a page in a browser talk to the server. Off unless asked for:
@@ -726,8 +834,15 @@ func writeJSONString(w *bufio.Writer, s string) {
 // runServer loads the model and serves until killed. This is the foreground
 // path; `hum start` re-execs the binary into it as a detached child.
 func runServer(cfg Config) error {
+	// Bind before loading: a taken port should fail in a millisecond, not after
+	// twenty seconds and twenty gigabytes.
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return fmt.Errorf("cannot listen on %s: %w", cfg.Addr, err)
+	}
 	w, err := NewWorker(cfg.Python, cfg.Worker, cfg.Model, cfg.CacheEntries)
 	if err != nil {
+		ln.Close()
 		return err
 	}
 	s := &Server{w: w, model: ModelID}
@@ -746,11 +861,16 @@ func runServer(cfg Config) error {
 			}}})
 	})
 	// Health is what `hum start` polls to know the model finished loading, and
-	// what `hum status` reports.
+	// what `hum status` reports. It is only "ok" while the worker is alive.
 	started := time.Now()
 	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
+		status := "ok"
+		if err := w.deadErr(); err != nil {
+			status = "worker stopped"
+			rw.WriteHeader(http.StatusServiceUnavailable)
+		}
 		json.NewEncoder(rw).Encode(map[string]any{
-			"status": "ok", "model": cfg.Model, "addr": cfg.Addr,
+			"status": status, "model": cfg.Model, "addr": cfg.Addr,
 			"pid": os.Getpid(), "uptime_s": int(time.Since(started).Seconds()),
 			"max_context": w.maxContext,
 		})
@@ -759,6 +879,24 @@ func runServer(cfg Config) error {
 	if cfg.CORS {
 		h = withCORS(mux)
 	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	// A server without its worker is a zombie: it answers /health, `hum status`
+	// says running, and every request fails. Better to leave with the worker
+	// so the pid file goes stale and `hum start` works again.
+	go func() {
+		<-w.died
+		log.Printf("worker stopped; shutting down")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}()
 	log.Printf("listening on %s", cfg.Addr)
-	return http.ListenAndServe(cfg.Addr, h)
+	err = srv.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) {
+		if derr := w.deadErr(); derr != nil {
+			return derr
+		}
+		return nil
+	}
+	return err
 }

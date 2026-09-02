@@ -102,7 +102,7 @@ func banner(p palette) string {
 type cmdDoc struct{ name, desc string }
 
 var commands = []cmdDoc{
-	{"start", "download the model if needed, then serve in the background"},
+	{"start", "download the model the first time, then serve in the background"},
 	{"chat", "talk to the model right here in the terminal"},
 	{"agent", "same, but it can read, write and run things for you"},
 	{"ask", "answer one question and exit  (hum ask \"why is the sky blue\")"},
@@ -111,7 +111,7 @@ var commands = []cmdDoc{
 	{"restart", "stop, then start again"},
 	{"status", "is it running, on what address, with which model"},
 	{"logs", "show the log  (-f to follow, -n for line count)"},
-	{"model", "which model was picked for this machine, and why"},
+	{"model", "the one model it runs, where it lives, and how big it is"},
 	{"config", "the saved configuration"},
 	{"serve", "run in the foreground, for debugging"},
 	{"version", "print the version"},
@@ -141,7 +141,7 @@ func helpText() string {
 
 	b.WriteString("  " + p.green("QUICK START") + "\n")
 	b.WriteString("    " + p.blue("hum start") + "\n")
-	b.WriteString("    " + p.dim("Downloads the right model for your Mac the first time, then serves") + "\n")
+	b.WriteString("    " + p.dim("Downloads the model the first time (20 GB, once), then serves") + "\n")
 	b.WriteString("    " + p.dim("on http://127.0.0.1:4242/v1 — point any OpenAI client at it.") + "\n\n")
 	b.WriteString("    " + p.blue("hum chat") + "\n")
 	b.WriteString("    " + p.dim("Or just talk to it here, without setting up a client at all.") + "\n\n")

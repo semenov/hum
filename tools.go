@@ -59,60 +59,85 @@ type Event struct {
 }
 
 // Splitter turns a raw token-text stream into content / reasoning / tool-call
-// events. It withholds a short tail so a tag split across two chunks is still
-// recognised.
+// events, and ends the stream at the first stop sequence. It withholds a short
+// tail so a tag or stop split across two chunks is still recognised.
 type Splitter struct {
 	tools   map[string]ToolDef
+	stops   []string // caller's stop sequences; content only, never returned
+	hold    int      // the most that may need to be kept back
 	buf     strings.Builder
 	think   bool
 	inTool  bool
+	stopped bool
 	toolBuf strings.Builder
 }
 
-func NewSplitter(defs []ToolDef) *Splitter {
+func NewSplitter(defs []ToolDef, stops []string) *Splitter {
 	m := make(map[string]ToolDef, len(defs))
 	for _, d := range defs {
 		if d.Function.Name != "" {
 			m[d.Function.Name] = d
 		}
 	}
-	return &Splitter{tools: m}
-}
-
-// maxHold is the longest tag minus one: the most we may need to keep back.
-func maxHold() int {
-	n := 0
-	for _, t := range allTags {
-		if len(t) > n {
-			n = len(t)
+	s := &Splitter{tools: m}
+	for _, st := range stops {
+		if st != "" {
+			s.stops = append(s.stops, st)
 		}
 	}
-	return n - 1
+	// The longest marker minus one: a marker can be missing at most that much.
+	for _, t := range allTags {
+		s.hold = max(s.hold, len(t)-1)
+	}
+	for _, t := range s.stops {
+		s.hold = max(s.hold, len(t)-1)
+	}
+	return s
 }
 
-// safeCut returns how much of s can be emitted without risking a split tag.
-func safeCut(s string) int {
-	limit := len(s)
-	if limit > maxHold() {
-		limit = maxHold()
+// Stopped reports whether a stop sequence has matched. Nothing after it is
+// emitted, and the caller should stop feeding the splitter.
+func (s *Splitter) Stopped() bool { return s.stopped }
+
+// markers are the strings whose start may be hiding at the end of a chunk.
+// Stops only count outside the think block, where they could be emitted.
+func (s *Splitter) markers() []string {
+	if s.think {
+		return allTags
 	}
+	return append(append([]string{}, allTags...), s.stops...)
+}
+
+// safeCut returns how much of text can be emitted without risking a split
+// marker.
+func (s *Splitter) safeCut(text string) int {
+	limit := min(len(text), s.hold)
+	markers := s.markers()
 	for k := limit; k > 0; k-- {
-		tail := s[len(s)-k:]
-		for _, t := range allTags {
+		tail := text[len(text)-k:]
+		for _, t := range markers {
 			if strings.HasPrefix(t, tail) {
-				return len(s) - k
+				return len(text) - k
 			}
 		}
 	}
-	return len(s)
+	return len(text)
 }
 
 func (s *Splitter) Push(chunk string) []Event {
+	if s.stopped {
+		return nil
+	}
 	s.buf.WriteString(chunk)
 	return s.drain(false)
 }
 
-func (s *Splitter) Flush() []Event { return s.drain(true) }
+func (s *Splitter) Flush() []Event {
+	if s.stopped {
+		return nil
+	}
+	return s.drain(true)
+}
 
 func (s *Splitter) drain(final bool) []Event {
 	var out []Event
@@ -139,11 +164,18 @@ func (s *Splitter) drain(final bool) []Event {
 			continue
 		}
 
-		// find the earliest tag of interest
+		// find the earliest marker of interest
 		idx, tag := -1, ""
 		for _, t := range []string{tagToolOpen, tagThinkOpen, tagThinkClose} {
 			if i := strings.Index(work, t); i >= 0 && (idx < 0 || i < idx) {
 				idx, tag = i, t
+			}
+		}
+		if !s.think {
+			for _, t := range s.stops {
+				if i := strings.Index(work, t); i >= 0 && (idx < 0 || i < idx) {
+					idx, tag = i, t
+				}
 			}
 		}
 		if idx < 0 {
@@ -160,6 +192,12 @@ func (s *Splitter) drain(final bool) []Event {
 			s.think = true
 		case tagThinkClose:
 			s.think = false
+		default:
+			// A stop sequence: the text before it has been emitted, the
+			// sequence itself and everything after it are discarded.
+			s.stopped = true
+			s.buf.Reset()
+			return out
 		}
 	}
 
@@ -170,7 +208,7 @@ func (s *Splitter) drain(final bool) []Event {
 		out = append(out, s.emit(work)...)
 		return out
 	}
-	cut := safeCut(work)
+	cut := s.safeCut(work)
 	out = append(out, s.emit(work[:cut])...)
 	s.buf.WriteString(work[cut:])
 	return out

@@ -17,7 +17,9 @@ class Hum < Formula
     # own virtualenv so nothing is installed into the user's Python.
     system Formula["python@3.12"].opt_bin/"python3.12", "-m", "venv", libexec/"venv"
     system venv_python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"
-    system venv_python, "-m", "pip", "install", "--quiet", "mlx-lm", "llguidance"
+    # Pinned: the worker reaches into mlx-lm's BatchGenerator and tokenizer
+    # internals, so an unplanned upgrade is a broken `hum start`.
+    system venv_python, "-m", "pip", "install", "--quiet", "mlx-lm==0.31.3", "llguidance==1.8.0"
 
     libexec.install "worker.py"
 
@@ -33,8 +35,8 @@ class Hum < Formula
 
   def caveats
     <<~EOS
-      The first `hum start` downloads a model chosen for this Mac's memory —
-      up to 20 GB, once. It goes to ~/.hum/models.
+      The first `hum start` downloads the model — 20 GB, once. It goes to
+      ~/.hum/models. hum needs an Apple Silicon Mac with 32 GB or more.
 
         hum start     serve on http://127.0.0.1:4242/v1
         hum chat      talk to it in the terminal

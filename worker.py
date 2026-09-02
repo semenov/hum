@@ -3,15 +3,21 @@
 Does ONLY: chat template -> tokenize -> prefill -> decode loop -> emit token ids.
 No detokenization, no stop-string matching, no JSON, no SSE. All of that is Go's job.
 
-Protocol (binary, over stdout):
-  startup : writes vocab byte-table to argv[2], then b'R' (ready)
-  request : one JSON line on stdin {"messages":[...],"max_tokens":N,"temp":F}
-  reply   : b'C' + u32 n_tokens_reused   (prompt-cache hit length)
+Protocol (binary, over stdout; every event after startup carries the request
+id it belongs to, since requests run concurrently):
+  startup : writes vocab byte-table to argv[2], then b'R' + u32 max_context
+  request : one JSON line on stdin {"id":N,"messages":[...],"max_tokens":N,...}
+  cancel  : one JSON line on stdin {"cancel":N}; nothing is emitted for it
+  reply   : b'X' + u32 n_prompt_tokens   (refused: prompt over the ceiling)
+            b'!' + u32 0                 (refused: could not be rendered)
+            b'C' + u32 n_tokens_reused   (prompt-cache hit length)
+            b'K' + u32 thinking          (1 if the prompt ends inside <think>)
             b'P' + u32 n_prompt_tokens   (prefill done -> TTFT marker)
             b'T' + u32 token_id          (repeated)
+            b'F' + u32 truncated         (1 if max_tokens ran out)
             b'E' + u32 n_generated       (done)
 """
-import json, os, queue, struct, sys, threading
+import json, os, queue, struct, sys, threading, traceback
 from collections import deque
 import mlx.core as mx
 import llguidance
@@ -515,8 +521,14 @@ incoming = queue.Queue()
 def _read_stdin():
     for line in sys.stdin:
         line = line.strip()
-        if line:
+        if not line:
+            continue
+        try:
             incoming.put(json.loads(line))
+        except ValueError:
+            # One bad line must not take the reader thread down with it: every
+            # later request would then wait forever on a worker that looks alive.
+            print(f"ignoring unparseable line ({len(line)} bytes)", file=sys.stderr, flush=True)
     incoming.put(None)
 
 
@@ -561,10 +573,23 @@ class Admitted:
 def render_request(req):
     """Turn a request into something admittable, or refuse it outright.
 
-    Returns None when the prompt cannot ever fit, having already told the
-    client so — that is a property of the prompt, not of how busy we are.
+    Returns None when the request was refused, having already told the client
+    so: a prompt over the ceiling is a property of the prompt, not of how busy
+    we are, and a request the template cannot render is nobody else's fault
+    either. Neither is allowed to take the worker down, or every other caller
+    would pay for it.
     """
     rid = req["id"]
+    try:
+        return _render_request(req, rid)
+    except Exception:
+        traceback.print_exc()
+        emit(b"!", rid, 0)
+        out.flush()
+        return None
+
+
+def _render_request(req, rid):
     tools = req.get("tools")
     think = req.get("enable_thinking", True)
     msgs = normalise(req["messages"])
@@ -622,7 +647,9 @@ def render_request(req):
     if think and budget_think > 0 and THINK_OPEN and THINK_CLOSE:
         procs.append(ThinkBudget(budget_think, reasoning_is_open(prompt)))
 
-    max_tokens = int(req.get("max_tokens", 256))
+    # The ceiling is what fits in memory, and the answer has to fit in it
+    # alongside the prompt: a generous max_tokens is a limit, not a plan.
+    max_tokens = max(1, min(int(req.get("max_tokens", 256)), MAX_CONTEXT - len(prompt)))
     print(f"prompt {len(prompt)} | stable {n_stable} | reused {n_reused} "
           f"| prefill {len(prompt) - n_reused} | chunk {chunk} "
           f"| entries {len(history.entries)}", file=sys.stderr, flush=True)
@@ -641,6 +668,28 @@ def render_request(req):
 
 threading.Thread(target=_read_stdin, daemon=True).start()
 
+# mlx-lm's GenerationBatch.filter leaves logits_processors (and samplers)
+# unfiltered when every entry is empty, so the list outlives the sequences it
+# described and the next request's processors land at the wrong index: a
+# schema or tool grammar is silently dropped after any plain request. Handing
+# every request a no-op processor keeps the list filtered but costs more than
+# half of the batched throughput (217 -> 95 tok/s at 8 clients), because it
+# forces the per-sequence Python loop on every step. So fix the filter itself.
+# Upstream: mlx_lm/generate.py, GenerationBatch.filter.
+from mlx_lm.generate import GenerationBatch as _GB
+_orig_filter = _GB.filter
+
+
+def _aligned_filter(self, keep):
+    _orig_filter(self, keep)
+    if len(self.logits_processors) != len(self.uids):
+        self.logits_processors = [[] for _ in self.uids]
+    if len(self.samplers) != len(self.uids):
+        self.samplers = [None for _ in self.uids]
+
+
+_GB.filter = _aligned_filter
+
 gen = BatchGenerator(
     model,
     stop_tokens=[[t] for t in sorted(eos)],
@@ -654,6 +703,24 @@ pending = deque()         # rendered, waiting for room
 live_tokens = 0
 closed = False
 
+
+def cancel(rid):
+    """Drop a request the client has walked away from. A finished sequence
+    still shares every decode step with the others, so an abandoned one is
+    not just wasted work for its caller but a slower step for everyone."""
+    global live_tokens
+    for a in list(pending):
+        if a.rid == rid:
+            pending.remove(a)
+            return
+    for uid, st in list(live.items()):
+        if st.rid == rid:
+            gen.remove([uid])
+            live_tokens -= st.budget
+            del live[uid]
+            print(f"cancelled request {rid} after {st.n_gen} tokens", file=sys.stderr, flush=True)
+            return
+
 while True:
     # Drain stdin. Block only when there is genuinely nothing else to do,
     # otherwise a queued request would wait a whole decode step to be seen.
@@ -665,9 +732,12 @@ while True:
         if req is None:
             closed = True
             break
-        a = render_request(req)
-        if a is not None:
-            pending.append(a)
+        if "cancel" in req:
+            cancel(req["cancel"])
+        else:
+            a = render_request(req)
+            if a is not None:
+                pending.append(a)
         if incoming.empty():
             break
 

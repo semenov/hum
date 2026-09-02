@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // The agent's tools. Reading is unrestricted within the working directory;
@@ -38,7 +37,7 @@ const toolSchema = `[
      "path":{"type":"string"},"content":{"type":"string"}},
      "required":["path","content"]}}},
  {"type":"function","function":{
-   "name":"run_command","description":"Run a shell command and return its output. It starts in the working directory but is not restricted to it.",
+   "name":"run_command","description":"Run a shell command and return its output. It starts in the working directory; it can read anywhere but cannot write outside it.",
    "parameters":{"type":"object","properties":{
      "command":{"type":"string"}},"required":["command"]}}}
 ]`
@@ -118,7 +117,9 @@ func (o agentOpts) confirm(u *UI, kind, what, detail string) bool {
 	return a == "y" || a == "yes"
 }
 
-// safePath keeps the agent inside the directory it was started in.
+// safePath keeps the agent inside the directory it was started in. Symlinks
+// are resolved first, otherwise a link inside the directory that points
+// outside it would let write_file modify a file the sandbox promise covers.
 func safePath(root, p string) (string, error) {
 	if p == "" {
 		p = "."
@@ -128,11 +129,39 @@ func safePath(root, p string) (string, error) {
 		abs = filepath.Join(root, p)
 	}
 	abs = filepath.Clean(abs)
-	rel, err := filepath.Rel(root, abs)
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = root
+	}
+	real, err := resolveExisting(abs)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRoot, real)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%s is outside the working directory", p)
 	}
-	return abs, nil
+	return real, nil
+}
+
+// resolveExisting resolves symlinks in as much of p as exists, so a path to a
+// file that is about to be created is judged by the directory it lands in.
+func resolveExisting(p string) (string, error) {
+	var tail []string
+	for {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				real = filepath.Join(real, tail[i])
+			}
+			return real, nil
+		}
+		dir, base := filepath.Split(filepath.Clean(p))
+		if dir == "" || dir == p {
+			return "", fmt.Errorf("cannot resolve %s", p)
+		}
+		tail = append(tail, base)
+		p = filepath.Clean(dir)
+	}
 }
 
 func clip(s string) string {
@@ -324,5 +353,3 @@ func searchTree(root, pattern, base string) string {
 	}
 	return strings.Join(hits, "\n")
 }
-
-var _ = time.Now

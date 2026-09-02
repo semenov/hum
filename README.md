@@ -633,8 +633,7 @@ removes the downloaded weights and the settings.
 
 ## Limitations
 
-- A client that disconnects mid-request does not stop the work: the worker
-  finishes generating and the tokens are dropped. Wasted compute, not a leak.
+- `stop` sequences are matched in the answer only, not inside the reasoning.
 - Byte-level BPE detokenisation is verified on Qwen; the SPM path is written
   but untested.
 - `/v1/chat/completions` and `/v1/models` only.

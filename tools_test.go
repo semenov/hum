@@ -19,7 +19,7 @@ func defs() []ToolDef {
 // collect feeds text in chunks of size n (n<=0 means all at once).
 func collect(t *testing.T, text string, n int) (content, reasoning string, calls []ToolCall) {
 	t.Helper()
-	s := NewSplitter(defs())
+	s := NewSplitter(defs(), nil)
 	var evs []Event
 	if n <= 0 {
 		evs = append(evs, s.Push(text)...)
@@ -206,5 +206,91 @@ func TestWorkerPayloadCarriesSampling(t *testing.T) {
 	bias, ok := m["logit_bias"].(map[string]any)
 	if !ok || bias["77916"] != -100.0 {
 		t.Errorf("logit_bias did not survive: %s", got)
+	}
+}
+
+// collectStops is collect with stop sequences, fed in chunks of n.
+func collectStops(t *testing.T, text string, stops []string, n int) (content string, stopped bool) {
+	t.Helper()
+	s := NewSplitter(defs(), stops)
+	var evs []Event
+	for i := 0; i < len(text); i += n {
+		j := min(i+n, len(text))
+		evs = append(evs, s.Push(text[i:j])...)
+	}
+	evs = append(evs, s.Flush()...)
+	for _, e := range evs {
+		if e.Kind == evContent {
+			content += e.Text
+		}
+	}
+	return content, s.Stopped()
+}
+
+func TestStopSequenceEndsContent(t *testing.T) {
+	text := "First line.\nSecond line.\n###\nThis must never be seen."
+	for _, n := range []int{1, 3, 7, 100} {
+		c, stopped := collectStops(t, text, []string{"###"}, n)
+		if !stopped {
+			t.Fatalf("chunk=%d: stop not detected", n)
+		}
+		// Truncated at the match, and the stop text itself is not returned.
+		if c != "First line.\nSecond line.\n" {
+			t.Errorf("chunk=%d: content = %q", n, c)
+		}
+	}
+}
+
+func TestStopSequenceIgnoredInsideThinking(t *testing.T) {
+	text := "<think>\nplanning ### here\n</think>\nAnswer ### tail"
+	c, stopped := collectStops(t, text, []string{"###"}, 2)
+	if !stopped || c != "\nAnswer " {
+		t.Errorf("content = %q, stopped = %v", c, stopped)
+	}
+}
+
+func TestNoStopMatchEmitsEverything(t *testing.T) {
+	text := "A near miss: ## and #, but never three."
+	c, stopped := collectStops(t, text, []string{"###"}, 1)
+	if stopped || c != text {
+		t.Errorf("content = %q, stopped = %v", c, stopped)
+	}
+}
+
+func TestContentAcceptsPartsAndStrings(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		wantErr        bool
+	}{
+		{"string", `{"content":"hello"}`, "hello", false},
+		{"null", `{"content":null}`, "", false},
+		{"one part", `{"content":[{"type":"text","text":"hello"}]}`, "hello", false},
+		{"two parts", `{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}`, "a\nb", false},
+		{"image part", `{"content":[{"type":"image_url","image_url":{"url":"x"}}]}`, "", true},
+		{"number", `{"content":5}`, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var m Msg
+			err := json.Unmarshal([]byte(c.in), &m)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
+			}
+			if string(m.Content) != c.want {
+				t.Errorf("content = %q, want %q", m.Content, c.want)
+			}
+		})
+	}
+}
+
+func TestMaxTokensSpellings(t *testing.T) {
+	if got := (ChatReq{}).maxTokens(); got != defaultMaxTokens {
+		t.Errorf("default = %d", got)
+	}
+	if got := (ChatReq{MaxTokens: 10}).maxTokens(); got != 10 {
+		t.Errorf("max_tokens = %d", got)
+	}
+	if got := (ChatReq{MaxTokens: 10, MaxCompletionTokens: 20}).maxTokens(); got != 20 {
+		t.Errorf("max_completion_tokens should win, got %d", got)
 	}
 }
